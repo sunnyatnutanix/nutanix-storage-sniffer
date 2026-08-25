@@ -325,6 +325,7 @@ def parse_ncli_containers_detailed(ncli_ctr_log: str) -> list:
         used_phys = _extract(r'Used Space \(Physical\)\s*:\s*([^\n]+)')
         free_phys = _extract(r'Free Space \(Physical\)\s*:\s*([^\n]+)')
         max_phys = _extract(r'Max Capacity \(Physical\)\s*:\s*([^\n]+)')
+        explicit_res_logical = _extract(r'Explicit Res\. \(Logical\)\s*:\s*([^\n]+)')
         thick_logical = _extract(r'Thick Prov\. \(Logical\)\s*:\s*([^\n]+)')
         rf = _extract(r'Replication Factor\s*:\s*([^\n]+)')
 
@@ -345,11 +346,14 @@ def parse_ncli_containers_detailed(ncli_ctr_log: str) -> list:
             "free_space_physical": free_phys,
             "used_space_physical": used_phys,
             "max_capacity_physical": max_phys,
+            "explicit_res_logical": explicit_res_logical,
             "thick_prov_logical": thick_logical,
             "replication_factor": rf,
             "free_space_physical_bytes": _bytes_from_field(free_phys),
             "used_space_physical_bytes": _bytes_from_field(used_phys),
             "max_capacity_physical_bytes": _bytes_from_field(max_phys),
+            "explicit_res_logical_bytes": _bytes_from_field(explicit_res_logical),
+            "thick_prov_logical_bytes": _bytes_from_field(thick_logical),
         }
         if c["name"]:
             containers.append(c)

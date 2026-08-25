@@ -127,10 +127,6 @@
 
             <div class="grid grid-cols-2 gap-3 text-xs">
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
-                    <span class="text-slate-300 font-medium">Free Storage Space</span>
-                    <input type="color" id="picker-freeSpace" onchange="updateColorFromPicker('freeSpace', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
-                </div>
-                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
                     <span class="text-slate-300 font-medium">Pending Deletion</span>
                     <input type="color" id="picker-pendingDeletion" onchange="updateColorFromPicker('pendingDeletion', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
@@ -143,10 +139,6 @@
                     <input type="color" id="picker-vg" onchange="updateColorFromPicker('vg', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
-                    <span class="text-slate-300 font-medium">Storage Containers</span>
-                    <input type="color" id="picker-container" onchange="updateColorFromPicker('container', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
-                </div>
-                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
                     <span class="text-slate-300 font-medium">Snapshots</span>
                     <input type="color" id="picker-snapshots" onchange="updateColorFromPicker('snapshots', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
@@ -155,8 +147,12 @@
                     <input type="color" id="picker-sharedClone" onchange="updateColorFromPicker('sharedClone', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
-                    <span class="text-slate-300 font-medium">Other VDisks</span>
-                    <input type="color" id="picker-otherVDisks" onchange="updateColorFromPicker('otherVDisks', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                    <span class="text-slate-300 font-medium">Explicit Reserved</span>
+                    <input type="color" id="picker-explicitReserve" onchange="updateColorFromPicker('explicitReserve', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Thick Provisioned</span>
+                    <input type="color" id="picker-thickProv" onchange="updateColorFromPicker('thickProv', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
                     <span class="text-slate-300 font-medium">Standard VDisks</span>
@@ -230,8 +226,8 @@
 
         <div class="flex items-center space-x-3">
             <div class="bg-slate-900 p-1 rounded border border-slate-700 flex text-xs">
-                <button id="mode-ssh-btn" onclick="switchMode('ssh')" class="px-3 py-1 rounded bg-sky-500 text-white font-semibold transition">🚀 Live SSH</button>
-                <button id="mode-file-btn" onclick="switchMode('file')" class="px-3 py-1 rounded text-slate-400 hover:text-white transition">📂 Offline File</button>
+                <button id="mode-ssh-btn" onclick="switchMode('ssh')" class="px-3 py-1 rounded bg-sky-500 text-white font-semibold transition">🚀 Live CVM</button>
+                <button id="mode-file-btn" onclick="switchMode('file')" class="px-3 py-1 rounded text-slate-400 hover:text-white transition">📂 Offline Mode</button>
             </div>
 
             <form id="cvm-form" onsubmit="scanCVM(event)" class="flex items-center space-x-2 text-xs">
@@ -268,9 +264,9 @@
             
             <!-- Top Hierarchy Section -->
             <div id="hierarchy-wrapper" class="flex flex-col min-h-[100px] overflow-hidden" style="flex: 1 1 0%;">
-                <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex-shrink-0">Storage Pool Hierarchy</h2>
+                <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex-shrink-0 text-center">Storage Pool Hierarchy</h2>
                 <div id="hierarchy-tree-container" class="flex-1 overflow-y-auto pr-1 space-y-1 bg-slate-900/50 p-2 rounded border border-slate-700/60 font-sans">
-                    <p class="text-xs text-slate-500 italic">No storage pool loaded.</p>
+                    <p class="text-xs text-slate-500 italic text-center">No storage pool loaded.</p>
                 </div>
             </div>
 
@@ -281,27 +277,27 @@
 
             <!-- Middle Inspector Section -->
             <div id="inspector-wrapper" class="flex-1 flex flex-col min-h-[100px] mb-2 min-w-0 overflow-hidden flex-shrink-0">
-                <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex-shrink-0">Storage Pool Inspector</h2>
+                <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex-shrink-0 text-center">Storage Pool Inspector</h2>
                 <div id="inspector" class="flex-1 bg-slate-900 p-3 rounded-lg border border-slate-700 text-xs space-y-2 overflow-y-auto transition-all duration-200 custom-scrollbar">
-                    <p class="text-slate-500">Connect to a CVM or load an offline diagnostic log file.</p>
+                    <p class="text-slate-500 text-center">Connect to a CVM or load an offline diagnostic log file.</p>
                 </div>
             </div>
 
             <!-- Legend & Interactive Color Palette Button -->
             <div id="legend-container" class="flex-shrink-0 space-y-2 text-xs text-slate-400 border-t border-slate-700 pt-3">
                 <div class="flex justify-between items-center mb-1">
-                    <span class="font-semibold text-slate-300">Entity Color Legend:</span>
-                    <button onclick="openColorModal()" class="text-[10px] bg-slate-700 hover:bg-amber-600 text-slate-200 px-2 py-0.5 rounded transition">🎨 Customize</button>
+                    <div class="flex items-center space-x-1.5 w-full">
+                        <div class="relative flex-1 min-w-0">
+                            <button id="legend-filter-button" onclick="toggleLegendFilterMenu(event)" class="w-full text-[10px] bg-slate-900 border border-slate-700 text-slate-300 px-2 py-0.5 rounded focus:outline-none flex items-center justify-between">
+                                <span id="legend-filter-label" class="inline-flex items-center"></span>
+                                <span class="ml-2">▾</span>
+                            </button>
+                            <div id="legend-filter-menu" class="hidden fixed z-40 bg-slate-900 border border-slate-700 rounded shadow-2xl min-w-[200px] p-1 overflow-y-auto"></div>
+                        </div>
+                        <button onclick="openColorModal()" class="text-[10px] bg-slate-700 hover:bg-amber-600 text-slate-200 px-2 py-0.5 rounded transition flex-shrink-0" title="Customize palette">🎨</button>
+                    </div>
                 </div>
-                <div class="grid grid-cols-2 gap-1 text-[11px]" id="legend-grid">
-                    <div id="legend-item-pendingDeletion" onclick="toggleLegendFilter('pendingDeletion')" class="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-700/50 p-1 rounded border border-transparent transition"><span id="swatch-pendingDeletion" class="w-3 h-3 rounded inline-block flex-shrink-0"></span><span class="truncate text-slate-300 pointer-events-none select-none">Pending Deletion</span></div>
-                    <div id="legend-item-vm" onclick="toggleLegendFilter('vm')" class="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-700/50 p-1 rounded border border-transparent transition"><span id="swatch-vm" class="w-3 h-3 rounded inline-block flex-shrink-0"></span><span class="truncate text-slate-300 pointer-events-none select-none">VMs</span></div>
-                    <div id="legend-item-vg" onclick="toggleLegendFilter('vg')" class="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-700/50 p-1 rounded border border-transparent transition"><span id="swatch-vg" class="w-3 h-3 rounded inline-block flex-shrink-0"></span><span class="truncate text-slate-300 pointer-events-none select-none">Volume Groups</span></div>
-                    <div id="legend-item-snapshots" onclick="toggleLegendFilter('snapshots')" class="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-700/50 p-1 rounded border border-transparent transition"><span id="swatch-snapshots" class="w-3 h-3 rounded inline-block flex-shrink-0"></span><span class="truncate text-slate-300 pointer-events-none select-none">Snapshots</span></div>
-                    <div id="legend-item-sharedClone" onclick="toggleLegendFilter('sharedClone')" class="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-700/50 p-1 rounded border border-transparent transition"><span id="swatch-sharedClone" class="w-3 h-3 rounded inline-block flex-shrink-0"></span><span class="truncate text-slate-300 pointer-events-none select-none">Shared VDisks</span></div>
-                    <div id="legend-item-vdisk" onclick="toggleLegendFilter('vdisk')" class="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-700/50 p-1 rounded border border-transparent transition"><span id="swatch-vdisk" class="w-3 h-3 rounded inline-block flex-shrink-0"></span><span class="truncate text-slate-300 pointer-events-none select-none">Standard VDisks</span></div>
-                    <div id="legend-item-activeChain" onclick="toggleLegendFilter('activeChain')" class="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-700/50 p-1 rounded border border-transparent transition"><span id="swatch-activeChain" class="w-3 h-3 rounded border border-amber-300 inline-block flex-shrink-0"></span><span class="truncate text-amber-300 font-bold pointer-events-none select-none">Active Chain</span></div>
-                </div>
+                <span class="block text-[10px] text-slate-500 text-center">Use dropdown to highlight</span>
             </div>
         </div>
 
@@ -717,6 +713,8 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             container: '#2e1065',
             snapshots: '#0f766e',
             sharedClone: '#0284c7',
+            explicitReserve: '#14b8a6',
+            thickProv: '#a855f7',
             otherVDisks: '#0369a1',
             vdisk: '#3f5765',
             activeChain: '#f59e0b'
@@ -746,6 +744,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 const picker = document.getElementById(`picker-${key}`);
                 if (picker) picker.value = themeColors[key];
             });
+            updateLegendDropdownStyles();
         }
 
         function openColorModal() {
@@ -776,37 +775,126 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             drawCanvasState(); 
         }
 
+        function setLegendFilterFromDropdown(value) {
+            activeLegendFilter = value ? value : null;
+            updateLegendUI();
+            drawCanvasState();
+        }
+
+        function toggleLegendFilterMenu(event) {
+            if (event) event.stopPropagation();
+            const menu = document.getElementById("legend-filter-menu");
+            if (!menu) return;
+            const opening = menu.classList.contains("hidden");
+            menu.classList.toggle("hidden");
+            if (opening) positionLegendFilterMenu();
+        }
+
+        function hideLegendFilterMenu() {
+            const menu = document.getElementById("legend-filter-menu");
+            if (menu) menu.classList.add("hidden");
+        }
+
+        function positionLegendFilterMenu() {
+            const menu = document.getElementById("legend-filter-menu");
+            const button = document.getElementById("legend-filter-button");
+            if (!menu || !button || menu.classList.contains("hidden")) return;
+
+            const buttonRect = button.getBoundingClientRect();
+            const viewportW = window.innerWidth;
+            const viewportH = window.innerHeight;
+            const margin = 8;
+
+            menu.style.maxHeight = `${Math.max(160, Math.floor(viewportH * 0.45))}px`;
+            menu.style.visibility = "hidden";
+            menu.style.left = "0px";
+            menu.style.top = "0px";
+            menu.style.minWidth = `${Math.max(200, Math.floor(buttonRect.width))}px`;
+
+            const menuRect = menu.getBoundingClientRect();
+            const spaceBelow = viewportH - buttonRect.bottom - margin;
+            const spaceAbove = buttonRect.top - margin;
+            const openUp = spaceBelow < Math.min(menuRect.height, 220) && spaceAbove > spaceBelow;
+
+            let top = openUp
+                ? buttonRect.top - menuRect.height - 4
+                : buttonRect.bottom + 4;
+            top = Math.max(margin, Math.min(top, viewportH - menuRect.height - margin));
+
+            let left = buttonRect.left;
+            if (left + menuRect.width > viewportW - margin) {
+                left = viewportW - menuRect.width - margin;
+            }
+            left = Math.max(margin, left);
+
+            menu.style.left = `${left}px`;
+            menu.style.top = `${top}px`;
+            menu.style.visibility = "visible";
+        }
+
+        function renderLegendFilterMenu() {
+            const menu = document.getElementById("legend-filter-menu");
+            if (!menu) return;
+            const items = [
+                { key: "", label: "All" },
+                { key: "pendingDeletion", label: "Pending Deletion" },
+                { key: "vm", label: "VMs" },
+                { key: "vg", label: "Volume Groups" },
+                { key: "snapshots", label: "Snapshots" },
+                { key: "sharedClone", label: "Shared VDisks" },
+                { key: "explicitReserve", label: "Explicit Reserved" },
+                { key: "thickProv", label: "Thick Provisioned" },
+                { key: "vdisk", label: "Standard VDisks" },
+                { key: "activeChain", label: "Active Chain" },
+            ];
+            menu.innerHTML = items.map(({ key, label }) => {
+                const color = key ? (themeColors[key] || "#cbd5e1") : "#cbd5e1";
+                const active = (activeLegendFilter || "") === key;
+                return `<button type="button" data-key="${key}" onclick="setLegendFilterFromDropdown('${key}'); hideLegendFilterMenu();" class="w-full text-left px-2 py-1 rounded text-xs flex items-center gap-2 ${active ? 'bg-slate-700 text-white' : 'text-slate-300 hover:bg-slate-800'}">
+                    <span style="width:10px;height:10px;border-radius:2px;background:${color};display:inline-block;flex-shrink:0;"></span>
+                    <span>${label}</span>
+                </button>`;
+            }).join("");
+        }
+
+        function updateLegendDropdownStyles() {
+            const labelByKey = {
+                pendingDeletion: "Pending Deletion",
+                vm: "VMs",
+                vg: "Volume Groups",
+                snapshots: "Snapshots",
+                sharedClone: "Shared VDisks",
+                explicitReserve: "Explicit Reserved",
+                thickProv: "Thick Provisioned",
+                vdisk: "Standard VDisks",
+                activeChain: "Active Chain",
+            };
+            const activeColor = activeLegendFilter ? (themeColors[activeLegendFilter] || "#cbd5e1") : "#cbd5e1";
+            const btn = document.getElementById("legend-filter-button");
+            const label = document.getElementById("legend-filter-label");
+            if (btn) {
+                btn.style.borderColor = activeLegendFilter ? activeColor : "";
+                btn.style.boxShadow = activeLegendFilter ? `0 0 0 1px ${activeColor} inset` : "";
+            }
+            if (label) {
+                const text = activeLegendFilter ? (labelByKey[activeLegendFilter] || activeLegendFilter) : "All";
+                const swatch = `<span style="width:10px;height:10px;border-radius:2px;background:${activeColor};display:inline-block;flex-shrink:0;margin-right:6px;"></span>`;
+                label.innerHTML = `${swatch}${text}`;
+            }
+            renderLegendFilterMenu();
+        }
+
         function updateLegendUI() {
-            const keys = ['pendingDeletion', 'vm', 'vg', 'snapshots', 'sharedClone', 'vdisk', 'activeChain'];
-            keys.forEach(key => {
-                const el = document.getElementById(`legend-item-${key}`);
-                if (!el) return;
-                const textEl = el.querySelector('.truncate');
-                if (activeLegendFilter) {
-                    if (activeLegendFilter === key) {
-                        el.classList.add('bg-slate-700', 'border-sky-500');
-                        el.classList.remove('border-transparent');
-                        el.style.opacity = "1";
-                        if (textEl && key !== 'activeChain') textEl.classList.add('text-white', 'font-bold');
-                    } else {
-                        el.classList.remove('bg-slate-700', 'border-sky-500');
-                        el.classList.add('border-transparent');
-                        el.style.opacity = "0.3";
-                        if (textEl && key !== 'activeChain') textEl.classList.remove('text-white', 'font-bold');
-                    }
-                } else {
-                    el.classList.remove('bg-slate-700', 'border-sky-500');
-                    el.classList.add('border-transparent');
-                    el.style.opacity = "1";
-                    if (textEl && key !== 'activeChain') textEl.classList.remove('text-white', 'font-bold');
-                }
-            });
+            updateLegendDropdownStyles();
+            positionLegendFilterMenu();
         }
 
         function getLegendCategory(d) {
             const data = d.data;
             if (data.vdisk_id && activeChainVDiskIds.has(String(data.vdisk_id))) return 'activeChain';
             if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return 'sharedClone';
+            if (data.is_explicit_reserve_block || data.name === "Explicit Reserved (Logical)") return 'explicitReserve';
+            if (data.is_thick_prov_block || data.name === "Thick Provisioned") return 'thickProv';
             if (data.is_shared_clone_block) {
                 const matchesRoot = activeChainId && String(data.chain_id) === String(activeChainId);
                 const matchesMember = data.member_chain_ids && activeChainId && data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
@@ -837,6 +925,8 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         function getEntityColor(data) {
             if (data.vdisk_id && activeChainVDiskIds.has(String(data.vdisk_id))) return themeColors.activeChain;
             if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return themeColors.sharedClone;
+            if (data.is_explicit_reserve_block || data.name === "Explicit Reserved (Logical)") return themeColors.explicitReserve;
+            if (data.is_thick_prov_block || data.name === "Thick Provisioned") return themeColors.thickProv;
             if (data.is_shared_clone_block) {
                 const matchesRoot = activeChainId && String(data.chain_id) === String(activeChainId);
                 const matchesMember = data.member_chain_ids && activeChainId && data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
@@ -879,6 +969,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 e.preventDefault();
                 openSearchModal();
             } else if (e.key === "Escape") {
+                hideLegendFilterMenu();
                 const modal = document.getElementById("search-modal");
                 const cModal = document.getElementById("color-modal");
                 let modalClosed = false;
@@ -907,6 +998,9 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 }
             }
         });
+        window.addEventListener("click", () => hideLegendFilterMenu());
+        window.addEventListener("resize", () => positionLegendFilterMenu());
+        window.addEventListener("scroll", () => positionLegendFilterMenu(), true);
 
         function openSearchModal() {
             document.getElementById("search-modal").classList.remove("hidden");
@@ -2364,7 +2458,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 ctx.save();
                 ctx.fillStyle = getEntityColor(d.data);
                 
-                if (isFilteredOut) ctx.globalAlpha = 0.15;
+                if (isFilteredOut) ctx.globalAlpha = 0.5;
                 else ctx.globalAlpha = 1;
 
                 ctx.fillRect(d.x0, d.y0, w, h);

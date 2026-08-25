@@ -749,7 +749,6 @@ def process_container_centric_logs(sections: dict):
         # #endregion
         shared_storage_nodes.sort(key=lambda x: x.get("real_bytes", 0), reverse=True)
         shared_storage_total = sum(n.get("real_bytes", 0) for n in shared_storage_nodes)
-        c_total_with_shared = c_total + shared_storage_total
 
         container_children = []
         for group_name, group_nodes in entity_groups.items():
@@ -760,6 +759,52 @@ def process_container_centric_logs(sections: dict):
                 "formatted_size": format_bytes(group_total),
                 "children": group_nodes
             })
+        try:
+            replication_factor = int(str(c.get("replication_factor") or "1").strip())
+            if replication_factor <= 0:
+                replication_factor = 1
+        except Exception:
+            replication_factor = 1
+        explicit_res_bytes = int(c.get("explicit_res_logical_bytes", 0) or 0)
+        explicit_res_scaled_bytes = explicit_res_bytes * 2
+        if explicit_res_bytes > 0:
+            container_children.append({
+                "name": "Explicit Reserved (Logical)",
+                "aggregate_exclusive_bytes": explicit_res_scaled_bytes,
+                "formatted_size": format_bytes(explicit_res_scaled_bytes),
+                "children": [{
+                    "name": "Explicit Reserved (Logical)",
+                    "is_explicit_reserve_block": True,
+                    "container_name": c_name,
+                    "value": explicit_res_scaled_bytes,
+                    "real_bytes": explicit_res_scaled_bytes,
+                    "raw_explicit_reserve_bytes": explicit_res_bytes,
+                    "replication_factor": replication_factor,
+                    "scaled_by_2x": True,
+                    "display_source": "ncli_container_logical",
+                    "formatted_size": format_bytes(explicit_res_scaled_bytes),
+                }]
+            })
+        thick_prov_bytes = int(c.get("thick_prov_logical_bytes", 0) or 0)
+        thick_prov_scaled_bytes = thick_prov_bytes * 2
+        if thick_prov_bytes > 0:
+            container_children.append({
+                "name": "Thick Provisioned",
+                "aggregate_exclusive_bytes": thick_prov_scaled_bytes,
+                "formatted_size": format_bytes(thick_prov_scaled_bytes),
+                "children": [{
+                    "name": "Thick Provisioned",
+                    "is_thick_prov_block": True,
+                    "container_name": c_name,
+                    "value": thick_prov_scaled_bytes,
+                    "real_bytes": thick_prov_scaled_bytes,
+                    "raw_thick_prov_bytes": thick_prov_bytes,
+                    "replication_factor": replication_factor,
+                    "scaled_by_2x": True,
+                    "display_source": "ncli_container_logical",
+                    "formatted_size": format_bytes(thick_prov_scaled_bytes),
+                }]
+            })
         if shared_storage_nodes:
             container_children.append({
                 "name": "Shared Storage",
@@ -767,6 +812,7 @@ def process_container_centric_logs(sections: dict):
                 "formatted_size": format_bytes(shared_storage_total),
                 "children": shared_storage_nodes
             })
+        c_total_with_shared = c_total + shared_storage_total + explicit_res_scaled_bytes + thick_prov_scaled_bytes
         normalize_curator_primary_sources(container_children)
         container_children.sort(
             key=lambda g: (
@@ -785,8 +831,13 @@ def process_container_centric_logs(sections: dict):
             "container_used_space_physical_bytes": c.get("used_space_physical_bytes", 0),
             "container_free_space_physical": c.get("free_space_physical"),
             "container_max_capacity_physical": c.get("max_capacity_physical"),
+            "explicit_res_logical": c.get("explicit_res_logical"),
+            "explicit_res_logical_bytes": c.get("explicit_res_logical_bytes", 0),
+            "explicit_res_logical_scaled_bytes": explicit_res_scaled_bytes,
             "thick_prov_logical": c.get("thick_prov_logical"),
-            "replication_factor": c.get("replication_factor"),
+            "thick_prov_logical_bytes": c.get("thick_prov_logical_bytes", 0),
+            "thick_prov_logical_scaled_bytes": thick_prov_scaled_bytes,
+            "replication_factor": replication_factor,
             "children": container_children
         }
         container_nodes.append(container_node)
