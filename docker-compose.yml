@@ -1,0 +1,8 @@
+version: '3.8'
+
+services:
+  vdisk-sniffer:
+    build: .
+    container_name: vdisk_sniffer
+    network_mode: "host"
+    restart: always

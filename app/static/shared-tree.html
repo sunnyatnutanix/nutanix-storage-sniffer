@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shared Chain Tree Visualizer</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body { margin: 0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #020617; color: #e2e8f0; }
+        .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid #1e293b; background: #0f172a; }
+        .title { font-size: 14px; font-weight: 700; color: #34d399; }
+        .subtitle { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: #94a3b8; }
+        .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .btn { border: 1px solid #334155; background: #0b1220; color: #cbd5e1; border-radius: 6px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
+        .btn:hover { border-color: #64748b; color: #fff; }
+        .btn.active { border-color: #10b981; color: #a7f3d0; background: #052e2b; }
+        .search { background: #020617; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 5px 8px; font-size: 11px; width: 240px; }
+        .layout { display: grid; grid-template-columns: 2fr 1fr; height: calc(100vh - 54px); }
+        .canvas-wrap { position: relative; overflow: auto; border-right: 1px solid #1e293b; }
+        #tree-svg { display: block; background: #020617; min-width: 100%; min-height: 100%; }
+        .panel { overflow: auto; padding: 10px; }
+        .card { border: 1px solid #1e293b; border-radius: 8px; background: #0b1220; margin-bottom: 10px; padding: 10px; }
+        .k { color: #94a3b8; font-size: 11px; }
+        .v { color: #e2e8f0; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+        .small { font-size: 11px; color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+        .legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: #94a3b8; }
+        .dot { width: 10px; height: 10px; border-radius: 999px; display: inline-block; margin-right: 4px; }
+        .tooltip {
+            position: fixed;
+            display: none;
+            pointer-events: none;
+            z-index: 9999;
+            max-width: 420px;
+            background: rgba(2, 6, 23, 0.96);
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 8px 10px;
+            color: #e2e8f0;
+            font-size: 11px;
+            line-height: 1.45;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+        }
+        .ttk { color: #94a3b8; }
+        .ttv { color: #cbd5e1; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <div class="title">Shared Chain Multi-Tree</div>
+            <div id="subtitle" class="subtitle">Loading...</div>
+        </div>
+        <div class="toolbar">
+            <input id="node-search" class="search" type="text" placeholder="Search chain_id or vdisk_id">
+            <button class="btn" onclick="jumpToSearch()">Jump</button>
+            <button class="btn" onclick="expandAll()">Expand All</button>
+            <button class="btn" onclick="collapseAllChains()">Collapse Chains</button>
+            <button id="color-container-btn" class="btn active" onclick="setColorMode('container')">Color: Container</button>
+            <button id="color-depth-btn" class="btn" onclick="setColorMode('depth')">Color: Depth</button>
+        </div>
+    </div>
+    <div class="layout">
+        <div class="canvas-wrap">
+            <svg id="tree-svg"></svg>
+        </div>
+        <div class="panel">
+            <div class="card">
+                <div class="k">Selected Node</div>
+                <div id="sel-name" class="v">None</div>
+                <div id="sel-type" class="small">type: -</div>
+            </div>
+            <div class="card">
+                <div class="k">Chain Usage</div>
+                <div id="sel-chain-usage" class="small">-</div>
+            </div>
+            <div class="card">
+                <div class="k">Members / VDisk Exclusive Usage</div>
+                <div id="sel-members" class="small">-</div>
+            </div>
+        </div>
+    </div>
+    <div id="chain-tooltip" class="tooltip"></div>
+
+    <script>
+        let appState = {
+            rawTree: null,
+            rootHierarchy: null,
+            svg: null,
+            g: null,
+            zoom: null,
+            colorMode: "container",
+            selectedNode: null
+        };
+
+        function formatBytes(bytes) {
+            const n = Number(bytes || 0);
+            if (!n || n <= 0) return "0 B";
+            if (n < 1024) return `${n} B`;
+            if (n < 1024 ** 2) return `${(n / 1024).toFixed(2)} KiB`;
+            if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(2)} MiB`;
+            if (n < 1024 ** 4) return `${(n / 1024 ** 3).toFixed(2)} GiB`;
+            return `${(n / 1024 ** 4).toFixed(2)} TiB`;
+        }
+
+        function parseSizeToBytes(text) {
+            const s = String(text || "").trim();
+            if (!s || s.toLowerCase() === "n/a") return 0;
+            const mBytes = s.match(/\(([\d,]+)\s*bytes\)/i);
+            if (mBytes) return Number(mBytes[1].replace(/,/g, ""));
+            const m = s.match(/^([\d.]+)\s*(b|bytes|kb|kib|mb|mib|gb|gib|tb|tib|pb|pib)\b/i);
+            if (!m) return 0;
+            const v = parseFloat(m[1]);
+            const u = m[2].toLowerCase();
+            const mul = (u === "b" || u === "bytes") ? 1 :
+                (u === "kb" || u === "kib") ? 1024 :
+                (u === "mb" || u === "mib") ? 1024 ** 2 :
+                (u === "gb" || u === "gib") ? 1024 ** 3 :
+                (u === "tb" || u === "tib") ? 1024 ** 4 : 1024 ** 5;
+            return Math.round(v * mul);
+        }
+
+        function extractSections(rawText) {
+            const headers = [
+                "===VDISK_CFG_START===",
+                "===SNAPSHOT_TREE_CHAIN_IDS_START===",
+                "===CURATOR_START===",
+                "===CURATOR_CHAIN_USAGE_START==="
+            ];
+            const sections = {};
+            const found = [];
+            headers.forEach(h => {
+                const p = rawText.indexOf(h);
+                if (p >= 0) found.push([p, h]);
+            });
+            found.sort((a, b) => a[0] - b[0]);
+            for (let i = 0; i < found.length; i++) {
+                const [pos, h] = found[i];
+                const start = pos + h.length;
+                const end = i + 1 < found.length ? found[i + 1][0] : rawText.length;
+                sections[h] = rawText.slice(start, end).trim();
+            }
+            return sections;
+        }
+
+        function parseVdiskCfg(content) {
+            const rows = [];
+            const blocks = content.split(/(?:\r?\n|^)(?=vdisk_id\s*:)/).filter(b => b.trim());
+            for (const block of blocks) {
+                const row = {};
+                for (const line of block.split(/\r?\n/)) {
+                    const m = line.trim().match(/^([a-zA-Z0-9_]+)\s*:\s*(.+)$/);
+                    if (!m) continue;
+                    let val = m[2].trim();
+                    if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+                    if (row[m[1]] === undefined) row[m[1]] = val;
+                    else row[m[1]] = `${row[m[1]]},${val}`;
+                }
+                if (row.vdisk_id) rows.push(row);
+            }
+            return rows;
+        }
+
+        function parseSnapshotChainIds(content) {
+            const map = {};
+            for (const line of content.split(/\r?\n/)) {
+                const t = line.trim();
+                const m = t.match(/^\[([a-f0-9-]{36})\]\[(\d+)\]\[(.*)\]$/i);
+                if (!m) continue;
+                map[m[1]] = m[3].split(",").map(v => v.trim()).filter(Boolean);
+            }
+            return map;
+        }
+
+        function parseCuratorVdiskUsage(content) {
+            const map = {};
+            for (const line of content.split(/\r?\n/)) {
+                const t = line.trim();
+                if (!t.startsWith("|") || !t.endsWith("|") || t.startsWith("+-")) continue;
+                const p = t.split("|").map(s => s.trim()).filter(Boolean);
+                if (p.length < 2 || !/^\d+$/.test(p[0])) continue;
+                map[p[0]] = { exclusive_usage: p[1], exclusive_bytes: parseSizeToBytes(p[1]) };
+            }
+            return map;
+        }
+
+        function parseCuratorChainUsage(content) {
+            const map = {};
+            for (const line of content.split(/\r?\n/)) {
+                const t = line.trim();
+                if (!t.startsWith("|") || !t.endsWith("|") || t.startsWith("+-")) continue;
+                const p = t.split("|").map(s => s.trim()).filter(Boolean);
+                if (p.length < 7 || !/^[0-9a-f-]{36}$/i.test(p[0])) continue;
+                map[p[0]] = {
+                    logical_exclusive: p[1],
+                    logical_exclusive_snapshot: p[2],
+                    logical_live: p[3],
+                    logical_shared_dedup: p[4],
+                    logical_shared_clone: p[5],
+                    physical_peg: p[6]
+                };
+            }
+            return map;
+        }
+
+        function buildMultiTree(rawText) {
+            const sections = extractSections(rawText);
+            const vdisks = parseVdiskCfg(sections["===VDISK_CFG_START==="] || "");
+            const chainMembers = parseSnapshotChainIds(sections["===SNAPSHOT_TREE_CHAIN_IDS_START==="] || "");
+            const vdiskUsage = parseCuratorVdiskUsage(sections["===CURATOR_START==="] || "");
+            const chainUsage = parseCuratorChainUsage(sections["===CURATOR_CHAIN_USAGE_START==="] || "");
+
+            const chainInfo = {};
+            for (const vd of vdisks) {
+                const cid = vd.chain_id;
+                if (!cid) continue;
+                if (!chainInfo[cid]) chainInfo[cid] = { chain_id: cid, parent_chain_id: "", members: new Set(), container_id: "" };
+                if (vd.parent_chain_id && !chainInfo[cid].parent_chain_id) chainInfo[cid].parent_chain_id = vd.parent_chain_id;
+                if (vd.container_id && !chainInfo[cid].container_id) chainInfo[cid].container_id = vd.container_id;
+                chainInfo[cid].members.add(String(vd.vdisk_id));
+            }
+            for (const [cid, members] of Object.entries(chainMembers)) {
+                if (!chainInfo[cid]) chainInfo[cid] = { chain_id: cid, parent_chain_id: "", members: new Set(), container_id: "" };
+                members.forEach(m => chainInfo[cid].members.add(String(m)));
+            }
+
+            const allChains = Object.keys(chainInfo);
+            const childrenMap = {};
+            allChains.forEach(cid => { childrenMap[cid] = []; });
+            const roots = [];
+            for (const cid of allChains) {
+                const p = chainInfo[cid].parent_chain_id;
+                if (p && childrenMap[p]) childrenMap[p].push(cid);
+                else roots.push(cid);
+            }
+
+            function sharedCloneBytesForChain(chainId) {
+                const usage = chainUsage[chainId] || {};
+                return parseSizeToBytes(usage.logical_shared_clone || "0 B");
+            }
+
+            Object.keys(childrenMap).forEach(parentCid => {
+                childrenMap[parentCid].sort((a, b) => sharedCloneBytesForChain(b) - sharedCloneBytesForChain(a));
+            });
+            roots.sort((a, b) => sharedCloneBytesForChain(b) - sharedCloneBytesForChain(a));
+
+            const visited = new Set();
+            function makeChainNode(cid) {
+                if (visited.has(cid)) return null;
+                visited.add(cid);
+                const info = chainInfo[cid];
+                const cu = chainUsage[cid] || {};
+                const memberNodes = Array.from(info.members).sort((a, b) => Number(a) - Number(b)).map(vdId => {
+                    const vu = vdiskUsage[vdId] || {};
+                    return {
+                        name: `VDisk ${vdId}`,
+                        node_type: "vdisk",
+                        vdisk_id: vdId,
+                        exclusive_usage: vu.exclusive_usage || "0 B",
+                        exclusive_bytes: vu.exclusive_bytes || 0
+                    };
+                });
+                const childChains = (childrenMap[cid] || []).map(makeChainNode).filter(Boolean);
+                return {
+                    name: cid,
+                    node_type: "chain",
+                    chain_id: cid,
+                    container_id: info.container_id || "",
+                    parent_chain_id: info.parent_chain_id || "",
+                    usage: cu,
+                    members: memberNodes,
+                    children: [...childChains, ...memberNodes]
+                };
+            }
+
+            return {
+                name: "ROOT",
+                node_type: "root",
+                children: roots.map(makeChainNode).filter(Boolean)
+            };
+        }
+
+        function getNodeColor(d) {
+            if (d.data.node_type === "root") return "#22c55e";
+            if (d.data.node_type === "vdisk") return "#f59e0b";
+            if (appState.colorMode === "depth") {
+                const palette = ["#38bdf8", "#a78bfa", "#34d399", "#f472b6", "#f59e0b", "#22d3ee"];
+                return palette[d.depth % palette.length];
+            }
+            const cid = d.data.container_id || "unknown";
+            let hash = 0;
+            for (let i = 0; i < cid.length; i++) hash = ((hash << 5) - hash) + cid.charCodeAt(i);
+            const hue = Math.abs(hash) % 360;
+            return `hsl(${hue} 70% 55%)`;
+        }
+
+        function collapseChainChildren(node) {
+            if (!node || !node.children) return;
+            node.children.forEach(c => collapseChainChildren(c));
+            if (node.data.node_type === "chain" && node.depth > 0) {
+                node._children = node.children;
+                node.children = null;
+            }
+        }
+
+        function renderTree(fileName) {
+            const svg = appState.svg;
+            const g = appState.g;
+            g.selectAll("*").remove();
+            const wrap = document.querySelector(".canvas-wrap");
+            const width = wrap.clientWidth;
+            const height = wrap.clientHeight;
+
+            const root = appState.rootHierarchy;
+            const totalRoots = (appState.rawTree.children || []).length;
+            document.getElementById("subtitle").textContent = `${fileName} • ${totalRoots} root chains • color: ${appState.colorMode}`;
+
+            const tree = d3.tree().nodeSize([26, 220]);
+            tree(root);
+
+            const minX = d3.min(root.descendants(), d => d.x) || 0;
+            const maxX = d3.max(root.descendants(), d => d.x) || 0;
+            const minY = d3.min(root.descendants(), d => d.y) || 0;
+            const maxY = d3.max(root.descendants(), d => d.y) || 0;
+            const xOffset = 30 - minX;
+            const yOffset = 30;
+            const contentWidth = Math.max(width, Math.ceil((maxY - minY) + 220));
+            const contentHeight = Math.max(height, Math.ceil((maxX - minX) + 120));
+            svg.attr("width", contentWidth).attr("height", contentHeight);
+
+            g.append("g")
+                .attr("stroke", "#334155")
+                .attr("stroke-width", 1.2)
+                .selectAll("path")
+                .data(root.links())
+                .enter()
+                .append("path")
+                .attr("fill", "none")
+                .attr("d", d3.linkHorizontal().x(d => d.y + yOffset).y(d => d.x + xOffset));
+
+            const node = g.append("g")
+                .selectAll("g")
+                .data(root.descendants())
+                .enter()
+                .append("g")
+                .attr("transform", d => `translate(${d.y + yOffset},${d.x + xOffset})`)
+                .style("cursor", "pointer")
+                .on("click", (_, d) => {
+                    appState.selectedNode = d;
+                    if (d.data.node_type === "chain" || d.data.node_type === "root") {
+                        if (d.children) {
+                            d._children = d.children;
+                            d.children = null;
+                        } else if (d._children) {
+                            d.children = d._children;
+                            d._children = null;
+                        }
+                        renderTree(fileName);
+                    }
+                    showDetails(d.data);
+                })
+                .on("mousemove", (event, d) => {
+                    if (d.data.node_type !== "chain") return;
+                    const tt = document.getElementById("chain-tooltip");
+                    const u = d.data.usage || {};
+                    tt.innerHTML = `
+                        <div><span class="ttk">chain_id:</span> <span class="ttv">${d.data.chain_id || "N/A"}</span></div>
+                        <div><span class="ttk">container_id:</span> <span class="ttv">${d.data.container_id || "N/A"}</span></div>
+                        <div><span class="ttk">logical_exclusive:</span> <span class="ttv">${u.logical_exclusive || "N/A"}</span></div>
+                        <div><span class="ttk">logical_exclusive_snapshot:</span> <span class="ttv">${u.logical_exclusive_snapshot || "N/A"}</span></div>
+                        <div><span class="ttk">logical_live:</span> <span class="ttv">${u.logical_live || "N/A"}</span></div>
+                        <div><span class="ttk">logical_shared_dedup:</span> <span class="ttv">${u.logical_shared_dedup || "N/A"}</span></div>
+                        <div><span class="ttk">logical_shared_clone:</span> <span class="ttv">${u.logical_shared_clone || "N/A"}</span></div>
+                        <div><span class="ttk">physical_peg:</span> <span class="ttv">${u.physical_peg || "N/A"}</span></div>
+                    `;
+                    tt.style.display = "block";
+                    tt.style.left = `${event.clientX + 14}px`;
+                    tt.style.top = `${event.clientY + 14}px`;
+                })
+                .on("mouseleave", () => {
+                    const tt = document.getElementById("chain-tooltip");
+                    tt.style.display = "none";
+                });
+
+            node.append("circle")
+                .attr("r", d => d.data.node_type === "root" ? 7 : d.data.node_type === "chain" ? 5.5 : 4.5)
+                .attr("fill", d => getNodeColor(d))
+                .attr("stroke", "#0f172a")
+                .attr("stroke-width", 1);
+
+            node.append("text")
+                .attr("x", 9)
+                .attr("dy", "0.32em")
+                .attr("fill", "#dbeafe")
+                .style("font-size", "10px")
+                .style("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
+                .text(d => {
+                    if (d.data.node_type === "root") return d.data.name;
+                    if (d.data.node_type === "chain") {
+                        const cloneVal = (d.data.usage && d.data.usage.logical_shared_clone) ? d.data.usage.logical_shared_clone : "N/A";
+                        const marker = d._children ? " [+]" : "";
+                        return `${cloneVal}${marker}`;
+                    }
+                    return `${d.data.vdisk_id} (${d.data.exclusive_usage})`;
+                });
+        }
+
+        function showDetails(data) {
+            document.getElementById("sel-name").textContent = data.node_type === "chain" ? data.chain_id : data.name;
+            document.getElementById("sel-type").textContent = `type: ${data.node_type}`;
+
+            if (data.node_type === "chain") {
+                const u = data.usage || {};
+                document.getElementById("sel-chain-usage").innerHTML = `
+                    container_id: ${data.container_id || "N/A"}<br>
+                    logical_exclusive: ${u.logical_exclusive || "N/A"}<br>
+                    logical_exclusive_snapshot: ${u.logical_exclusive_snapshot || "N/A"}<br>
+                    logical_live: ${u.logical_live || "N/A"}<br>
+                    logical_shared_dedup: ${u.logical_shared_dedup || "N/A"}<br>
+                    logical_shared_clone: ${u.logical_shared_clone || "N/A"}<br>
+                    physical_peg: ${u.physical_peg || "N/A"}
+                `;
+                const members = (data.members || []).slice(0, 400);
+                document.getElementById("sel-members").innerHTML = members.length
+                    ? members.map(m => `${m.vdisk_id}: ${m.exclusive_usage} (${formatBytes(m.exclusive_bytes)})`).join("<br>")
+                    : "No members";
+            } else if (data.node_type === "vdisk") {
+                document.getElementById("sel-chain-usage").textContent = "-";
+                document.getElementById("sel-members").textContent = `${data.vdisk_id}: ${data.exclusive_usage} (${formatBytes(data.exclusive_bytes)})`;
+            } else {
+                document.getElementById("sel-chain-usage").textContent = "-";
+                document.getElementById("sel-members").textContent = "-";
+            }
+        }
+
+        function setColorMode(mode) {
+            appState.colorMode = mode;
+            document.getElementById("color-container-btn").classList.toggle("active", mode === "container");
+            document.getElementById("color-depth-btn").classList.toggle("active", mode === "depth");
+            renderTree(localStorage.getItem("vdisk_sniffer_shared_tree_filename") || "offline.log");
+        }
+
+        function expandAll() {
+            appState.rootHierarchy.each(n => {
+                if (n._children) {
+                    n.children = n._children;
+                    n._children = null;
+                }
+            });
+            renderTree(localStorage.getItem("vdisk_sniffer_shared_tree_filename") || "offline.log");
+        }
+
+        function collapseAllChains() {
+            appState.rootHierarchy.each(n => {
+                if (n.data.node_type === "chain" && n.depth > 0 && n.children) {
+                    n._children = n.children;
+                    n.children = null;
+                }
+            });
+            renderTree(localStorage.getItem("vdisk_sniffer_shared_tree_filename") || "offline.log");
+        }
+
+        function jumpToSearch() {
+            const q = (document.getElementById("node-search").value || "").trim().toLowerCase();
+            if (!q) return;
+            let target = null;
+            appState.rootHierarchy.each(n => {
+                if (target) return;
+                if (n.data.node_type === "chain" && String(n.data.chain_id || "").toLowerCase().includes(q)) target = n;
+                if (n.data.node_type === "vdisk" && String(n.data.vdisk_id || "").toLowerCase().includes(q)) target = n;
+            });
+            if (!target) return;
+
+            let cur = target.parent;
+            while (cur) {
+                if (cur._children) {
+                    cur.children = cur._children;
+                    cur._children = null;
+                }
+                cur = cur.parent;
+            }
+            renderTree(localStorage.getItem("vdisk_sniffer_shared_tree_filename") || "offline.log");
+
+            // find same node again after rerender tree layout
+            let focus = null;
+            appState.rootHierarchy.each(n => {
+                if (focus) return;
+                if (target.data.node_type === "chain" && n.data.chain_id === target.data.chain_id) focus = n;
+                if (target.data.node_type === "vdisk" && n.data.vdisk_id === target.data.vdisk_id) focus = n;
+            });
+            if (!focus) return;
+
+            appState.selectedNode = focus;
+            showDetails(focus.data);
+
+            const wrap = document.querySelector(".canvas-wrap");
+            const tx = wrap.clientWidth * 0.25 - (focus.y + 30);
+            const ty = wrap.clientHeight * 0.5 - (focus.x + 30);
+            appState.svg.transition().duration(500).call(appState.zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(1.0));
+        }
+
+        (function main() {
+            const raw = localStorage.getItem("vdisk_sniffer_shared_tree_raw_log") || "";
+            const fileName = localStorage.getItem("vdisk_sniffer_shared_tree_filename") || "offline.log";
+            if (!raw) {
+                document.getElementById("subtitle").textContent = "No offline log payload found. Go back and load an offline file first.";
+                return;
+            }
+            const data = buildMultiTree(raw);
+            appState.rawTree = data;
+            appState.rootHierarchy = d3.hierarchy(data);
+            collapseChainChildren(appState.rootHierarchy);
+            appState.svg = d3.select("#tree-svg");
+            appState.g = appState.svg.append("g");
+            appState.zoom = d3.zoom().scaleExtent([0.2, 2.5]).on("zoom", (e) => appState.g.attr("transform", e.transform));
+            appState.svg.call(appState.zoom);
+            renderTree(fileName);
+            showDetails(data);
+            document.getElementById("node-search").addEventListener("keydown", (e) => {
+                if (e.key === "Enter") jumpToSearch();
+            });
+            window.addEventListener("resize", () => renderTree(fileName));
+        })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,3049 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>VDisk Sniffer - Nutanix Storage Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        .flip-transition {
+            transition: transform 380ms cubic-bezier(0.25, 1, 0.5, 1), opacity 380ms ease !important;
+        }
+
+        .sidebar-collapsed {
+            width: 0 !important;
+            min-width: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            border-right: none !important;
+            opacity: 0;
+            overflow: hidden;
+            pointer-events: none;
+        }
+
+        .resizer {
+            width: 8px;
+            cursor: col-resize;
+            background-color: #1e293b;
+            border-left: 1px solid #334155;
+            border-right: 1px solid #334155;
+            transition: background-color 0.2s ease, box-shadow 0.2s ease;
+            z-index: 40;
+            flex-shrink: 0;
+            user-select: none;
+        }
+
+        .resizer:hover, body.is-resizing .resizer {
+            background-color: #0284c7;
+            box-shadow: 0 0 10px rgba(2, 132, 199, 0.8);
+        }
+
+        body.is-resizing {
+            cursor: col-resize !important;
+            user-select: none !important;
+        }
+
+        body.is-resizing * {
+            user-select: none !important;
+            pointer-events: none !important;
+        }
+
+        body.is-resizing #resizer {
+            pointer-events: auto !important;
+        }
+
+        .v-resizer {
+            height: 10px;
+            cursor: row-resize;
+            background-color: transparent;
+            z-index: 40;
+            flex-shrink: 0;
+            user-select: none;
+        }
+
+        .v-resizer:hover, body.is-v-resizing .v-resizer {
+            background-color: rgba(245, 158, 11, 0.2);
+        }
+
+        body.is-v-resizing {
+            cursor: row-resize !important;
+            user-select: none !important;
+        }
+
+        body.is-v-resizing #sidebar-v-resizer {
+            pointer-events: auto !important;
+        }
+        
+        #treemap-canvas {
+            will-change: transform;
+        }
+        
+        details > summary {
+            list-style: none;
+        }
+        details > summary::-webkit-details-marker {
+            display: none;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 flex flex-col h-screen overflow-hidden">
+
+    <!-- Search Overlay Modal -->
+    <div id="search-modal" onclick="closeSearchModal(event)" class="fixed inset-0 bg-slate-950/80 backdrop-blur-md hidden z-50 flex items-center justify-center p-4 transition-opacity duration-200">
+        <div onclick="event.stopPropagation()" class="bg-slate-900 border border-sky-500/50 rounded-xl p-6 w-full max-w-2xl shadow-2xl space-y-4 relative">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+                <div class="flex items-center space-x-2 text-sky-400 font-bold text-base">
+                    <span>🔍</span>
+                    <span>Search Storage Entities</span>
+                </div>
+                <div class="flex items-center space-x-2 text-xs text-slate-500 font-mono">
+                    <span>Press <kbd class="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-slate-300">Enter</kbd> or <kbd class="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-slate-300">ESC</kbd></span>
+                </div>
+            </div>
+
+            <div class="relative">
+                <input type="text" id="search-input" oninput="onSearchInput()" onkeydown="onSearchKeyDown(event)" placeholder="Search VDisk ID, Parent VDisk ID, Chain ID (e.g. Chain ID: uuid), VDisk Name, NFS File..."
+                       class="w-full bg-slate-950 border border-slate-700 focus:border-sky-500 rounded-lg px-4 py-3 text-sm text-slate-100 focus:outline-none font-mono">
+                <button onclick="clearSearch()" id="search-clear-btn" class="hidden absolute right-3 top-3 text-slate-400 hover:text-white text-xs font-mono bg-slate-800 px-2 py-1 rounded">Clear</button>
+            </div>
+
+            <div class="text-[11px] text-slate-400 space-y-1">
+                <p>Matches: <b class="text-slate-200">VDisk ID, Parent VDisk ID, Chain ID (e.g. Chain ID: b49cea6d-...), VDisk UUID, VDisk Name, NFS File Name, Container, VM Name, VG Name</b></p>
+                <p id="search-stats" class="text-sky-400 font-mono"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Color Theme Customizer Popup Modal -->
+    <div id="color-modal" onclick="closeColorModal(event)" class="fixed inset-0 bg-slate-950/80 backdrop-blur-md hidden z-50 flex items-center justify-center p-4 transition-opacity duration-200">
+        <div onclick="event.stopPropagation()" class="bg-slate-900 border border-amber-500/50 rounded-xl p-6 w-full max-w-lg shadow-2xl space-y-4 relative">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+                <div class="flex items-center space-x-2 text-amber-400 font-bold text-base">
+                    <span>🎨</span>
+                    <span>Customize Entity Palette Colors</span>
+                </div>
+                <button onclick="closeColorModal()" class="text-slate-400 hover:text-white font-bold text-sm">✕</button>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 text-xs">
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Free Storage Space</span>
+                    <input type="color" id="picker-freeSpace" onchange="updateColorFromPicker('freeSpace', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Pending Deletion</span>
+                    <input type="color" id="picker-pendingDeletion" onchange="updateColorFromPicker('pendingDeletion', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Virtual Machines (VM)</span>
+                    <input type="color" id="picker-vm" onchange="updateColorFromPicker('vm', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Volume Groups (VG)</span>
+                    <input type="color" id="picker-vg" onchange="updateColorFromPicker('vg', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Storage Containers</span>
+                    <input type="color" id="picker-container" onchange="updateColorFromPicker('container', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Snapshots</span>
+                    <input type="color" id="picker-snapshots" onchange="updateColorFromPicker('snapshots', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Shared VDisks</span>
+                    <input type="color" id="picker-sharedClone" onchange="updateColorFromPicker('sharedClone', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Other VDisks</span>
+                    <input type="color" id="picker-otherVDisks" onchange="updateColorFromPicker('otherVDisks', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Standard VDisks</span>
+                    <input type="color" id="picker-vdisk" onchange="updateColorFromPicker('vdisk', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Active Chain Highlight</span>
+                    <input type="color" id="picker-activeChain" onchange="updateColorFromPicker('activeChain', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+            </div>
+
+            <div class="flex justify-between items-center pt-3 border-t border-slate-800 text-xs">
+                <button onclick="resetDefaultColors()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-semibold transition">Reset Defaults</button>
+                <button onclick="closeColorModal()" class="px-4 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded font-bold transition">Apply & Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating Cursor Tooltip -->
+    <div id="floating-tooltip" class="fixed hidden bg-slate-900/95 border border-sky-500 text-white text-xs px-3 py-2 rounded-lg shadow-2xl pointer-events-none z-[9999] backdrop-blur-sm transition-opacity duration-75"></div>
+
+    <!-- Hidden Offline Log Analysis Panel -->
+    <div id="offline-analysis-panel" class="fixed inset-0 h-screen bg-slate-950 border-t-2 border-emerald-500 shadow-2xl z-[70] transform translate-y-full transition-transform duration-300 ease-out flex flex-col">
+        <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700 bg-slate-900">
+            <div>
+                <h2 class="text-sm font-bold text-emerald-300">Offline Log Section Analyzer</h2>
+                <p id="offline-analysis-subtitle" class="text-[11px] text-slate-400 font-mono">No offline file loaded.</p>
+            </div>
+            <div class="flex items-center gap-2">
+                <button onclick="closeOfflineAnalysisPanel()" class="text-slate-300 hover:text-white text-xl leading-none px-2 py-1 rounded hover:bg-slate-700" title="Close">✕</button>
+            </div>
+        </div>
+        <div class="border-b border-slate-800 bg-slate-900/80 px-3 py-2">
+            <div id="offline-analysis-tabs" class="flex items-center gap-2 overflow-x-auto whitespace-nowrap">
+                <span class="text-slate-500 text-xs italic">Upload an offline log first.</span>
+            </div>
+        </div>
+        <div class="flex-1 overflow-auto p-3">
+                <div class="flex items-center justify-between mb-2">
+                    <h3 id="offline-analysis-detail-title" class="text-xs font-bold text-sky-300">Section Detail</h3>
+                    <span id="offline-analysis-detail-meta" class="text-[11px] text-slate-500 font-mono"></span>
+                </div>
+                <div id="offline-analysis-detail-content" class="text-[11px] leading-5 font-mono whitespace-pre-wrap break-all bg-slate-900 border border-slate-800 rounded p-3 text-slate-200 min-h-[120px]">Select a section on the left.</div>
+        </div>
+    </div>
+
+    <!-- Top Connection Header -->
+    <header class="bg-slate-800 border-b border-slate-700 px-6 py-3 flex flex-wrap justify-between items-center gap-4 flex-shrink-0 z-20">
+        <div class="flex items-center space-x-3">
+            <button id="sidebar-toggle-btn" onclick="toggleSidebar()" title="Toggle Sidebar"
+                    class="p-1.5 bg-slate-700 hover:bg-sky-600 rounded text-slate-200 transition focus:outline-none flex items-center justify-center">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+                </svg>
+            </button>
+            <h1 class="text-xl font-bold text-sky-400">Nutanix Storage Sniffer</h1>
+
+            <!-- Quick Search Button Trigger -->
+            <button onclick="openSearchModal()" title="Press / to search"
+                    class="px-2.5 py-1 bg-slate-900 border border-slate-700 hover:border-sky-500 rounded text-xs text-slate-300 hover:text-white transition flex items-center space-x-1.5">
+                <span>🔍 Search</span>
+                <kbd class="text-[10px] bg-slate-800 border border-slate-600 px-1 rounded text-slate-400 font-mono">/</kbd>
+            </button>
+
+            <!-- Search Active Filter Badge -->
+            <div id="search-filter-badge" class="hidden text-xs bg-sky-950 border border-sky-500/60 px-2.5 py-1 rounded-full text-sky-300 flex items-center space-x-1.5">
+                <span>Filter: <b id="search-query-text" class="font-mono text-white"></b></span>
+                <button onclick="clearSearch()" class="text-slate-400 hover:text-white font-bold text-sm leading-none ml-1">×</button>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-3">
+            <div class="bg-slate-900 p-1 rounded border border-slate-700 flex text-xs">
+                <button id="mode-ssh-btn" onclick="switchMode('ssh')" class="px-3 py-1 rounded bg-sky-500 text-white font-semibold transition">🚀 Live SSH</button>
+                <button id="mode-file-btn" onclick="switchMode('file')" class="px-3 py-1 rounded text-slate-400 hover:text-white transition">📂 Offline File</button>
+            </div>
+
+            <form id="cvm-form" onsubmit="scanCVM(event)" class="flex items-center space-x-2 text-xs">
+                <input type="text" id="cvm_ip" placeholder="CVM IP (e.g. 192.168.100.21)" required
+                       class="bg-slate-900 border border-slate-600 px-3 py-1.5 rounded focus:outline-none focus:border-sky-500 w-44">
+                <input type="text" id="username" value="nutanix" placeholder="Username" required
+                       class="bg-slate-900 border border-slate-600 px-3 py-1.5 rounded focus:outline-none focus:border-sky-500 w-24">
+                <input type="password" id="password" placeholder="Password" required
+                       class="bg-slate-900 border border-slate-600 px-3 py-1.5 rounded focus:outline-none focus:border-sky-500 w-28">
+                <button type="submit" id="scan-btn"
+                        class="bg-sky-500 hover:bg-sky-600 font-semibold px-4 py-1.5 rounded text-white transition flex items-center space-x-1">
+                    <span>Connect</span>
+                </button>
+            </form>
+
+            <form id="offline-form" onsubmit="uploadOfflineFile(event)" class="hidden flex items-center space-x-2 text-xs">
+                <button type="button" id="copy-script-btn" onclick="copyOfflineCommand()" 
+                        class="bg-slate-700 hover:bg-slate-600 font-semibold px-3 py-1.5 rounded text-white transition flex items-center space-x-1" title="Download offline collector script">
+                    <span>📥 Download Python Script</span>
+                </button>
+                <input type="file" id="offline_file" accept=".log,.txt" required
+                       class="bg-slate-900 border border-slate-600 px-3 py-1 rounded focus:outline-none focus:border-sky-500 text-slate-300 w-64 file:mr-2 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-xs file:bg-slate-700 file:text-slate-200 hover:file:bg-sky-600">
+                <button type="submit" id="upload-btn"
+                        class="bg-emerald-500 hover:bg-emerald-600 font-semibold px-4 py-1.5 rounded text-white transition flex items-center space-x-1">
+                    <span>Load File</span>
+                </button>
+            </form>
+        </div>
+    </header>
+
+    <div class="flex flex-1 overflow-hidden relative">
+        <!-- Left Sidebar Panel -->
+        <div id="sidebar" class="bg-slate-800 p-4 flex flex-col min-h-0 flex-shrink-0 transition-all duration-300 ease-in-out relative overflow-hidden" style="width: 320px;">
+            
+            <!-- Top Hierarchy Section -->
+            <div id="hierarchy-wrapper" class="flex flex-col min-h-[100px] overflow-hidden" style="flex: 1 1 0%;">
+                <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex-shrink-0">Storage Pool Hierarchy</h2>
+                <div id="hierarchy-tree-container" class="flex-1 overflow-y-auto pr-1 space-y-1 bg-slate-900/50 p-2 rounded border border-slate-700/60 font-sans">
+                    <p class="text-xs text-slate-500 italic">No storage pool loaded.</p>
+                </div>
+            </div>
+
+            <!-- Inner Vertical Resizer Bar -->
+            <div id="sidebar-v-resizer" class="v-resizer flex items-center justify-center my-1 cursor-row-resize py-1 group flex-shrink-0" title="Drag up/down to resize sections">
+                <div class="h-1 w-10 bg-slate-600 group-hover:bg-amber-400 rounded-full transition-colors"></div>
+            </div>
+
+            <!-- Middle Inspector Section -->
+            <div id="inspector-wrapper" class="flex-1 flex flex-col min-h-[100px] mb-2 min-w-0 overflow-hidden flex-shrink-0">
+                <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex-shrink-0">Storage Pool Inspector</h2>
+                <div id="inspector" class="flex-1 bg-slate-900 p-3 rounded-lg border border-slate-700 text-xs space-y-2 overflow-y-auto transition-all duration-200 custom-scrollbar">
+                    <p class="text-slate-500">Connect to a CVM or load an offline diagnostic log file.</p>
+                </div>
+            </div>
+
+            <!-- Legend & Interactive Color Palette Button -->
+            <div id="legend-container" class="flex-shrink-0 space-y-2 text-xs text-slate-400 border-t border-slate-700 pt-3">
+                <div class="flex justify-between items-center mb-1">
+                    <span class="font-semibold text-slate-300">Entity Color Legend:</span>
+                    <button onclick="openColorModal()" class="text-[10px] bg-slate-700 hover:bg-amber-600 text-slate-200 px-2 py-0.5 rounded transition">🎨 Customize</button>
+                </div>
+                <div class="grid grid-cols-2 gap-1 text-[11px]" id="legend-grid">
+                    <div id="legend-item-pendingDeletion" onclick="toggleLegendFilter('pendingDeletion')" class="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-700/50 p-1 rounded border border-transparent transition"><span id="swatch-pendingDeletion" class="w-3 h-3 rounded inline-block flex-shrink-0"></span><span class="truncate text-slate-300 pointer-events-none select-none">Pending Deletion</span></div>
+                    <div id="legend-item-vm" onclick="toggleLegendFilter('vm')" class="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-700/50 p-1 rounded border border-transparent transition"><span id="swatch-vm" class="w-3 h-3 rounded inline-block flex-shrink-0"></span><span class="truncate text-slate-300 pointer-events-none select-none">VMs</span></div>
+                    <div id="legend-item-vg" onclick="toggleLegendFilter('vg')" class="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-700/50 p-1 rounded border border-transparent transition"><span id="swatch-vg" class="w-3 h-3 rounded inline-block flex-shrink-0"></span><span class="truncate text-slate-300 pointer-events-none select-none">Volume Groups</span></div>
+                    <div id="legend-item-snapshots" onclick="toggleLegendFilter('snapshots')" class="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-700/50 p-1 rounded border border-transparent transition"><span id="swatch-snapshots" class="w-3 h-3 rounded inline-block flex-shrink-0"></span><span class="truncate text-slate-300 pointer-events-none select-none">Snapshots</span></div>
+                    <div id="legend-item-sharedClone" onclick="toggleLegendFilter('sharedClone')" class="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-700/50 p-1 rounded border border-transparent transition"><span id="swatch-sharedClone" class="w-3 h-3 rounded inline-block flex-shrink-0"></span><span class="truncate text-slate-300 pointer-events-none select-none">Shared VDisks</span></div>
+                    <div id="legend-item-vdisk" onclick="toggleLegendFilter('vdisk')" class="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-700/50 p-1 rounded border border-transparent transition"><span id="swatch-vdisk" class="w-3 h-3 rounded inline-block flex-shrink-0"></span><span class="truncate text-slate-300 pointer-events-none select-none">Standard VDisks</span></div>
+                    <div id="legend-item-activeChain" onclick="toggleLegendFilter('activeChain')" class="flex items-center space-x-1.5 cursor-pointer hover:bg-slate-700/50 p-1 rounded border border-transparent transition"><span id="swatch-activeChain" class="w-3 h-3 rounded border border-amber-300 inline-block flex-shrink-0"></span><span class="truncate text-amber-300 font-bold pointer-events-none select-none">Active Chain</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Vertical Resize Handler -->
+        <div id="resizer" class="resizer flex items-center justify-center group" title="Drag left/right to resize sidebar">
+            <div class="w-1 h-8 bg-slate-500 rounded-full group-hover:bg-white transition-colors"></div>
+        </div>
+
+        <!-- Right Main Treemap Canvas Container -->
+        <div class="flex-1 flex flex-col p-4 bg-slate-950 overflow-hidden min-w-0" id="treemap-container">
+            <div id="breadcrumbs" class="flex items-center space-x-2 text-xs font-mono bg-slate-900 border border-slate-700 px-3 py-2 rounded mb-3 text-slate-300 overflow-x-auto flex-shrink-0 w-full">
+                <span class="text-slate-500">Path:</span>
+                <span id="breadcrumb-trail" class="flex items-center space-x-1"></span>
+            </div>
+
+            <div class="flex-1 relative overflow-hidden w-full" id="canvas-wrapper">
+                <div id="status-overlay" class="hidden absolute inset-0 bg-slate-950/80 z-30 flex flex-col items-center justify-center space-y-3 p-6 text-center">
+                    <div id="spinner" class="w-8 h-8 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div>
+                    <p id="status-text" class="text-sm font-semibold text-sky-400">Analyzing storage usage...</p>
+                    <div id="error-box" class="hidden text-xs text-red-400 bg-red-950/80 border border-red-800 p-4 rounded max-w-xl text-left font-mono whitespace-pre-wrap"></div>
+                </div>
+                <div id="treemap" class="w-full h-full relative">
+                    <!-- HTML5 Canvas -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let rawTreeData = null;
+        let fullRootNode = null;
+        let currentHierarchyNode = null;
+        let isAnimating = false;
+        let activeSearchQuery = "";
+        let nodeTreeRowMap = new Map();
+        let activeChainId = null;
+        let activeChainVDiskIds = new Set();
+        let activeMemberChainIds = new Set();
+        let lineageNodeByVdiskId = new Map();
+        let lineageParentByChild = new Map();
+        let lineageChildrenByParent = new Map();
+        let isAdvancedPropertiesOpen = false; // Persistent state for the dropdown
+        
+        let activeLegendFilter = null; 
+        let currentDrawnNodes = [];
+        let lastHoveredNode = null;
+        let loadedOfflineFileName = "";
+        let loadedOfflineRawText = "";
+        let loadedOfflineSections = [];
+        let offlineTableState = null;
+        let activeOfflineSectionIndex = 0;
+
+        function copyOfflineCommand() {
+            const btn = document.getElementById("copy-script-btn");
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = `<span>⏬ Downloading...</span>`;
+            }
+            const a = document.createElement("a");
+            a.href = "/api/offline-script";
+            a.download = "collect_offline_log.py";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            if (btn) {
+                setTimeout(() => {
+                    btn.innerHTML = `<span>✅ Download Started</span>`;
+                    btn.classList.add("bg-emerald-600");
+                    btn.classList.remove("bg-slate-700");
+                    setTimeout(() => {
+                        btn.innerHTML = `<span>📥 Download Python Script</span>`;
+                        btn.classList.remove("bg-emerald-600");
+                        btn.classList.add("bg-slate-700");
+                        btn.disabled = false;
+                    }, 1400);
+                }, 150);
+            }
+            return;
+            const pythonScript = String.raw`#!/usr/bin/env python
+# OFFLINE_COLLECTOR_VERSION: v2026-08-22-opt-1
+from __future__ import print_function
+import subprocess
+import re
+import os
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+def run_cmd(cmd, timeout_sec=60):
+    try:
+        env_setup = (
+            "export PATH=/usr/local/nutanix/bin:/home/nutanix/cluster/bin:/home/nutanix/bin:$PATH; "
+            "source /etc/profile >/dev/null 2>&1; "
+            "source ~/.bashrc >/dev/null 2>&1; "
+        )
+        full_cmd = env_setup + cmd
+        p = subprocess.Popen(
+            full_cmd,
+            shell=True,
+            executable="/bin/bash",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        out, err = p.communicate(timeout=timeout_sec)
+        res = ""
+        if out:
+            res += out.decode("utf-8", "ignore")
+        if err:
+            err_str = err.decode("utf-8", "ignore")
+            if "Using curator master" not in err_str:
+                res += "\n[STDERR]\n" + err_str
+        return res
+    except subprocess.TimeoutExpired:
+        p.kill()
+        return "[TIMEOUT] Command expired after %ss: %s" % (timeout_sec, cmd)
+    except Exception as e:
+        return "[ERROR] " + str(e)
+
+def run_binary(binary_cmd, timeout_sec=90):
+    parts = binary_cmd.split(" ", 1)
+    bin_name = parts[0]
+    args = " " + parts[1] if len(parts) > 1 else ""
+    possible_paths = [
+        "/home/nutanix/cluster/bin/" + bin_name,
+        "/usr/local/nutanix/bin/" + bin_name,
+        "/home/nutanix/bin/" + bin_name,
+        bin_name,
+    ]
+    for path in possible_paths:
+        full_cmd = path + args
+        res = run_cmd(full_cmd, timeout_sec=timeout_sec)
+        clean_res = res.strip()
+        if (
+            clean_res
+            and "command not found" not in clean_res
+            and "No such file" not in clean_res
+            and not clean_res.startswith("[STDERR]")
+        ):
+            return res
+    return ""
+
+def get_bool_env(name, default=False):
+    v = os.environ.get(name, "")
+    if not v:
+        return default
+    return str(v).strip().lower() in ("1", "true", "yes", "y", "on")
+
+def get_int_env(name, default):
+    try:
+        return int(os.environ.get(name, str(default)))
+    except Exception:
+        return default
+
+def run_batch_with_retry(batch_idx, ids_chunk, cmd_prefix, timeout_sec=240, retry_chunk_size=40):
+    if not ids_chunk:
+        return batch_idx, ""
+    cmd = cmd_prefix + ",".join(ids_chunk)
+    out = run_cmd(cmd, timeout_sec=timeout_sec)
+    out_l = out.lower()
+    has_failure = ("[timeout]" in out_l) or ("[error]" in out_l)
+    if (not has_failure) or len(ids_chunk) <= retry_chunk_size:
+        return batch_idx, out
+    sub_rows = []
+    for i in range(0, len(ids_chunk), retry_chunk_size):
+        sub = ids_chunk[i:i + retry_chunk_size]
+        sub_cmd = cmd_prefix + ",".join(sub)
+        sub_out = run_cmd(sub_cmd, timeout_sec=timeout_sec)
+        sub_rows.append(sub_out)
+    return batch_idx, "\n".join(sub_rows)
+
+def run_chunked_parallel(ids, chunk_size, max_workers, cmd_prefix, timeout_sec=240, retry_chunk_size=40):
+    if not ids:
+        return ""
+    batches = [(i // chunk_size + 1, ids[i:i + chunk_size]) for i in range(0, len(ids), chunk_size)]
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        results = list(ex.map(
+            lambda t: run_batch_with_retry(
+                t[0], t[1], cmd_prefix,
+                timeout_sec=timeout_sec,
+                retry_chunk_size=retry_chunk_size
+            ),
+            batches
+        ))
+    results.sort(key=lambda x: x[0])
+    return "\n".join(r[1] for r in results if r[1])
+
+FAST_MODE = get_bool_env("FAST_MODE", False)
+SKIP_NFS_LS = get_bool_env("SKIP_NFS_LS", False)
+MAX_CONTAINERS = get_int_env("MAX_CONTAINERS", 0)
+NFS_WORKERS = max(1, get_int_env("NFS_WORKERS", 4))
+CURATOR_WORKERS = max(1, get_int_env("CURATOR_WORKERS", 4))
+CURATOR_VDISK_CHUNK = max(1, get_int_env("CURATOR_VDISK_CHUNK", 80 if FAST_MODE else 120))
+CURATOR_CHAIN_CHUNK = max(1, get_int_env("CURATOR_CHAIN_CHUNK", 80 if FAST_MODE else 120))
+CURATOR_RETRY_CHUNK = max(1, get_int_env("CURATOR_RETRY_CHUNK", 30 if FAST_MODE else 40))
+collector_timing = {}
+
+print("[1/7] Collecting core NCLI + vdisk metadata...")
+t0 = time.time()
+ncli_ctr = run_cmd("ncli container ls", timeout_sec=90)
+ncli_vm = run_cmd("ncli vm ls", timeout_sec=120)
+ncli_vg = run_cmd("ncli volume-group ls", timeout_sec=120)
+ncli_sp = run_cmd("ncli storagepool ls", timeout_sec=60)
+vdisk_cfg = run_binary("vdisk_config_printer", timeout_sec=120)
+collector_timing["core_query_sec"] = round(time.time() - t0, 3)
+
+print("[2/7] Collecting per-container nfs_ls sections...")
+container_names = []
+for m in re.finditer(r"^\s*Name\s*:\s*([^\n]+)", ncli_ctr, re.MULTILINE):
+    nm = m.group(1).strip()
+    if nm and nm not in container_names:
+        container_names.append(nm)
+nfs_ls_sections = []
+if MAX_CONTAINERS > 0:
+    container_names = container_names[:MAX_CONTAINERS]
+if SKIP_NFS_LS:
+    nfs_ls_out = ""
+    collector_timing["nfs_ls_sec"] = 0.0
+else:
+    t0 = time.time()
+    def collect_nfs(cname):
+        nfs_cmd = "nfs_ls -liaRh '/%s'" % cname.replace("'", "'\\''")
+        nfs_out = run_cmd(nfs_cmd, timeout_sec=120 if FAST_MODE else 180)
+        return cname, "###CONTAINER:%s\n%s\n###CONTAINER_END###" % (cname, nfs_out)
+
+    with ThreadPoolExecutor(max_workers=NFS_WORKERS) as ex:
+        nfs_rows = list(ex.map(collect_nfs, container_names))
+    nfs_rows.sort(key=lambda x: x[0])
+    nfs_ls_out = "\n".join([r[1] for r in nfs_rows])
+    collector_timing["nfs_ls_sec"] = round(time.time() - t0, 3)
+
+print("[3/7] Parsing IDs for curator batching...")
+raw_vdisk_ids = sorted(
+    set(re.findall(r"^\s*vdisk_id\s*:\s*(\d+)", vdisk_cfg, re.MULTILINE)),
+    key=lambda x: int(x),
+)
+raw_chain_ids = sorted(
+    set(re.findall(r"^\s*chain_id\s*:\s*\"([0-9a-fA-F-]{36})\"", vdisk_cfg, re.MULTILINE))
+)
+
+def run_curator_vdisk_usage(vdisk_ids, chunk_size=120):
+    return run_chunked_parallel(
+        vdisk_ids,
+        chunk_size=chunk_size,
+        max_workers=CURATOR_WORKERS,
+        cmd_prefix="curator_cli get_vdisk_usage lookup_vdisk_ids=",
+        timeout_sec=240 if not FAST_MODE else 180,
+        retry_chunk_size=CURATOR_RETRY_CHUNK
+    )
+
+def run_curator_chain_usage(chain_ids, chunk_size=120):
+    return run_chunked_parallel(
+        chain_ids,
+        chunk_size=chunk_size,
+        max_workers=CURATOR_WORKERS,
+        cmd_prefix="curator_cli get_vdisk_chain_usage lookup_chain_ids=",
+        timeout_sec=240 if not FAST_MODE else 180,
+        retry_chunk_size=CURATOR_RETRY_CHUNK
+    )
+
+print("[4/7] Querying curator vdisk usage...")
+t0 = time.time()
+curator_out = run_curator_vdisk_usage(raw_vdisk_ids, chunk_size=CURATOR_VDISK_CHUNK)
+collector_timing["curator_vdisk_sec"] = round(time.time() - t0, 3)
+print("[5/7] Querying curator chain usage...")
+t0 = time.time()
+curator_chain_out = run_curator_chain_usage(raw_chain_ids, chunk_size=CURATOR_CHAIN_CHUNK)
+collector_timing["curator_chain_sec"] = round(time.time() - t0, 3)
+collector_timing["container_count"] = len(container_names)
+collector_timing["vdisk_count"] = len(raw_vdisk_ids)
+collector_timing["chain_count"] = len(raw_chain_ids)
+collector_timing["fast_mode"] = FAST_MODE
+collector_timing["skip_nfs_ls"] = SKIP_NFS_LS
+collector_timing["collector_workers"] = {"nfs": NFS_WORKERS, "curator": CURATOR_WORKERS}
+collector_timing["collector_chunk"] = {"vdisk": CURATOR_VDISK_CHUNK, "chain": CURATOR_CHAIN_CHUNK, "retry": CURATOR_RETRY_CHUNK}
+
+out_filename = "vdisk_sniffer_offline.log"
+print("[6/7] Writing output to %s..." % out_filename)
+with open(out_filename, "w") as f:
+    f.write("===VDISK_CFG_START===\n" + vdisk_cfg + "\n")
+    f.write("===NCLI_SP_START===\n" + ncli_sp + "\n")
+    f.write("===NCLI_VM_START===\n" + ncli_vm + "\n")
+    f.write("===NCLI_VG_START===\n" + ncli_vg + "\n")
+    f.write("===NCLI_CTR_START===\n" + ncli_ctr + "\n")
+    f.write("===NFS_LS_START===\n" + nfs_ls_out + "\n")
+    f.write("===CURATOR_START===\n" + curator_out + "\n")
+    f.write("===CURATOR_CHAIN_USAGE_START===\n" + curator_chain_out + "\n")
+    f.write("===COLLECTOR_TIMING_START===\n" + json.dumps(collector_timing) + "\n")
+
+print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
+
+            function showSuccess() {
+                const btn = document.getElementById("copy-script-btn");
+                const originalText = btn.innerHTML;
+                btn.innerHTML = `<span>✅ Copied!</span>`;
+                btn.classList.add("bg-emerald-600");
+                btn.classList.remove("bg-slate-700");
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                    btn.classList.remove("bg-emerald-600");
+                    btn.classList.add("bg-slate-700");
+                }, 2000);
+            }
+
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(pythonScript).then(showSuccess).catch(err => {
+                    fallbackCopyTextToClipboard(pythonScript);
+                });
+            } else {
+                fallbackCopyTextToClipboard(pythonScript);
+            }
+
+            function fallbackCopyTextToClipboard(text) {
+                const textArea = document.createElement("textarea");
+                textArea.value = text;
+                textArea.style.top = "0";
+                textArea.style.left = "0";
+                textArea.style.position = "fixed";
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+
+                try {
+                    const successful = document.execCommand('copy');
+                    if (successful) showSuccess();
+                } catch (err) {}
+                document.body.removeChild(textArea);
+            }
+        }
+
+        let isResizingSidebar = false;
+        let lastSidebarWidth = 320;
+
+        function initSidebarResizer() {
+            const resizer = document.getElementById("resizer");
+            const sidebar = document.getElementById("sidebar");
+
+            resizer.addEventListener("mousedown", (e) => {
+                e.preventDefault();
+                isResizingSidebar = true;
+                document.body.classList.add("is-resizing");
+                sidebar.style.transition = "none";
+                window.addEventListener("mousemove", handleMouseMove);
+                window.addEventListener("mouseup", handleMouseUp);
+            });
+
+            function handleMouseMove(e) {
+                if (!isResizingSidebar) return;
+                const containerRect = document.querySelector('.flex.flex-1').getBoundingClientRect();
+                let newWidth = e.clientX - containerRect.left;
+                const minWidth = 200;
+                const maxWidth = Math.floor(window.innerWidth * 0.5);
+                if (newWidth < minWidth) newWidth = minWidth;
+                if (newWidth > maxWidth) newWidth = maxWidth;
+                sidebar.style.width = `${newWidth}px`;
+                lastSidebarWidth = newWidth;
+                if (currentHierarchyNode && !isAnimating) renderSpaceSnifferView(currentHierarchyNode);
+            }
+
+            function handleMouseUp() {
+                if (!isResizingSidebar) return;
+                isResizingSidebar = false;
+                document.body.classList.remove("is-resizing");
+                sidebar.style.transition = "";
+                window.removeEventListener("mousemove", handleMouseMove);
+                window.removeEventListener("mouseup", handleMouseUp);
+                if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+            }
+        }
+
+        let isVResizing = false;
+
+        function initSidebarVResizer() {
+            const vResizer = document.getElementById("sidebar-v-resizer");
+            const hierarchyWrapper = document.getElementById("hierarchy-wrapper");
+            const sidebar = document.getElementById("sidebar");
+
+            vResizer.addEventListener("mousedown", (e) => {
+                e.preventDefault();
+                isVResizing = true;
+                document.body.classList.add("is-v-resizing");
+                window.addEventListener("mousemove", handleVMouseMove);
+                window.addEventListener("mouseup", handleVMouseUp);
+            });
+
+            function handleVMouseMove(e) {
+                if (!isVResizing) return;
+                const wrapperRect = hierarchyWrapper.getBoundingClientRect();
+                let newHeight = e.clientY - wrapperRect.top;
+                const minHeight = 80;
+                const sidebarHeight = sidebar.clientHeight;
+                const legendHeight = document.getElementById("legend-container") ? document.getElementById("legend-container").offsetHeight : 140;
+                const maxHeight = sidebarHeight - legendHeight - 100;
+                if (newHeight < minHeight) newHeight = minHeight;
+                if (newHeight > maxHeight) newHeight = maxHeight;
+                hierarchyWrapper.style.height = `${newHeight}px`;
+                hierarchyWrapper.style.flex = "0 0 auto";
+            }
+
+            function handleVMouseUp() {
+                if (!isVResizing) return;
+                isVResizing = false;
+                document.body.classList.remove("is-v-resizing");
+                window.removeEventListener("mousemove", handleVMouseMove);
+                window.removeEventListener("mouseup", handleVMouseUp);
+            }
+        }
+
+        const defaultThemeColors = {
+            freeSpace: '#2d5a27',
+            pendingDeletion: '#881337',
+            vm: '#1e3a8a',
+            vg: '#581c87',
+            container: '#2e1065',
+            snapshots: '#0f766e',
+            sharedClone: '#0284c7',
+            otherVDisks: '#0369a1',
+            vdisk: '#3f5765',
+            activeChain: '#f59e0b'
+        };
+
+        let themeColors = { ...defaultThemeColors };
+
+        function loadThemeColors() {
+            try {
+                const saved = localStorage.getItem("vdisk_sniffer_colors");
+                if (saved) themeColors = { ...defaultThemeColors, ...JSON.parse(saved) };
+            } catch (e) {
+                themeColors = { ...defaultThemeColors };
+            }
+            updateColorSwatches();
+        }
+
+        function saveThemeColors() {
+            try { localStorage.setItem("vdisk_sniffer_colors", JSON.stringify(themeColors)); } catch (e) {}
+            updateColorSwatches();
+        }
+
+        function updateColorSwatches() {
+            Object.keys(themeColors).forEach(key => {
+                const swatch = document.getElementById(`swatch-${key}`);
+                if (swatch) swatch.style.backgroundColor = themeColors[key];
+                const picker = document.getElementById(`picker-${key}`);
+                if (picker) picker.value = themeColors[key];
+            });
+        }
+
+        function openColorModal() {
+            document.getElementById("color-modal").classList.remove("hidden");
+            updateColorSwatches();
+        }
+
+        function closeColorModal(event) {
+            document.getElementById("color-modal").classList.add("hidden");
+        }
+
+        function updateColorFromPicker(key, colorValue) {
+            themeColors[key] = colorValue;
+            saveThemeColors();
+            if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+        }
+
+        function resetDefaultColors() {
+            themeColors = { ...defaultThemeColors };
+            saveThemeColors();
+            if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+        }
+
+        function toggleLegendFilter(key) {
+            if (activeLegendFilter === key) activeLegendFilter = null; 
+            else activeLegendFilter = key; 
+            updateLegendUI();
+            drawCanvasState(); 
+        }
+
+        function updateLegendUI() {
+            const keys = ['pendingDeletion', 'vm', 'vg', 'snapshots', 'sharedClone', 'vdisk', 'activeChain'];
+            keys.forEach(key => {
+                const el = document.getElementById(`legend-item-${key}`);
+                if (!el) return;
+                const textEl = el.querySelector('.truncate');
+                if (activeLegendFilter) {
+                    if (activeLegendFilter === key) {
+                        el.classList.add('bg-slate-700', 'border-sky-500');
+                        el.classList.remove('border-transparent');
+                        el.style.opacity = "1";
+                        if (textEl && key !== 'activeChain') textEl.classList.add('text-white', 'font-bold');
+                    } else {
+                        el.classList.remove('bg-slate-700', 'border-sky-500');
+                        el.classList.add('border-transparent');
+                        el.style.opacity = "0.3";
+                        if (textEl && key !== 'activeChain') textEl.classList.remove('text-white', 'font-bold');
+                    }
+                } else {
+                    el.classList.remove('bg-slate-700', 'border-sky-500');
+                    el.classList.add('border-transparent');
+                    el.style.opacity = "1";
+                    if (textEl && key !== 'activeChain') textEl.classList.remove('text-white', 'font-bold');
+                }
+            });
+        }
+
+        function getLegendCategory(d) {
+            const data = d.data;
+            if (data.vdisk_id && activeChainVDiskIds.has(String(data.vdisk_id))) return 'activeChain';
+            if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return 'sharedClone';
+            if (data.is_shared_clone_block) {
+                const matchesRoot = activeChainId && String(data.chain_id) === String(activeChainId);
+                const matchesMember = data.member_chain_ids && activeChainId && data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
+                const matchesActiveMember = data.chain_id && activeMemberChainIds.has(String(data.chain_id));
+                if (matchesRoot || matchesMember || matchesActiveMember) return 'activeChain';
+                return 'sharedClone'; 
+            }
+            if (data.is_free) return 'freeSpace';
+            if (data.is_to_remove || (data.name && (data.name.includes("to_remove") || data.name.includes("Pending Deletion")))) return 'pendingDeletion';
+            if (data.name && data.name.startsWith("VM:")) return 'vm';
+            if (data.name && data.name.startsWith("VG:")) return 'vg';
+            if (data.name && data.name.includes("Other VDisks")) return 'otherVDisks';
+            if (data.name && data.name === "Snapshots") return 'snapshots';
+            if (data.name && (data.name.startsWith("Storage Pool") || data.name.startsWith("Used Space"))) return 'root';
+            if (data.children && !data.vdisk_id && !data.name.startsWith("VM:") && !data.name.startsWith("VG:")) return 'container'; 
+            return 'vdisk';
+        }
+
+        function nodeOrAncestorMatchesCategory(d, targetCategory) {
+            let curr = d;
+            while (curr) {
+                if (getLegendCategory(curr) === targetCategory) return true;
+                curr = curr.parent;
+            }
+            return false;
+        }
+
+        function getEntityColor(data) {
+            if (data.vdisk_id && activeChainVDiskIds.has(String(data.vdisk_id))) return themeColors.activeChain;
+            if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return themeColors.sharedClone;
+            if (data.is_shared_clone_block) {
+                const matchesRoot = activeChainId && String(data.chain_id) === String(activeChainId);
+                const matchesMember = data.member_chain_ids && activeChainId && data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
+                const matchesActiveMember = data.chain_id && activeMemberChainIds.has(String(data.chain_id));
+                if (matchesRoot || matchesMember || matchesActiveMember) return themeColors.activeChain;
+                return themeColors.sharedClone;
+            }
+            if (data.is_free) return themeColors.freeSpace;
+            if (data.is_to_remove || (data.name && data.name.includes("to_remove")) || (data.name && data.name.includes("Pending Deletion"))) return themeColors.pendingDeletion;
+            if (data.name && data.name.startsWith("VM:")) return themeColors.vm;
+            if (data.name && data.name.startsWith("VG:")) return themeColors.vg;
+            if (data.name && data.name.includes("Other VDisks")) return themeColors.otherVDisks;
+            if (data.name && data.name === "Snapshots") return themeColors.snapshots;
+            if (data.name && data.name.startsWith("Container-")) return themeColors.container;
+            return themeColors.vdisk;
+        }
+
+        function nodeContainsChainVDisk(d3Node) {
+            if (!d3Node || (activeChainVDiskIds.size === 0 && !activeChainId)) return false;
+            let found = false;
+            d3Node.each(n => {
+                if (n.data && n.data.vdisk_id && activeChainVDiskIds.has(String(n.data.vdisk_id))) {
+                    found = true;
+                }
+                if (n.data && n.data.is_shared_clone_block) {
+                    const matchesRoot = activeChainId && String(n.data.chain_id) === String(activeChainId);
+                    const matchesMember = n.data.member_chain_ids && activeChainId && n.data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
+                    const matchesActiveMember = n.data.chain_id && activeMemberChainIds.has(String(n.data.chain_id));
+                    if (matchesRoot || matchesMember || matchesActiveMember) {
+                        found = true;
+                    }
+                }
+            });
+            return found;
+        }
+
+        window.addEventListener("keydown", (e) => {
+            const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : "";
+            if (e.key === "/" && activeTag !== "input" && activeTag !== "textarea") {
+                e.preventDefault();
+                openSearchModal();
+            } else if (e.key === "Escape") {
+                const modal = document.getElementById("search-modal");
+                const cModal = document.getElementById("color-modal");
+                let modalClosed = false;
+
+                if (!modal.classList.contains("hidden")) {
+                    closeSearchModal();
+                    modalClosed = true;
+                }
+                if (!cModal.classList.contains("hidden")) {
+                    closeColorModal();
+                    modalClosed = true;
+                }
+
+                if (!modalClosed && activeSearchQuery !== "") {
+                    clearSearch();
+                } else if (!modalClosed && activeSearchQuery === "") {
+                    if (activeChainId || activeChainVDiskIds.size > 0 || activeMemberChainIds.size > 0) {
+                        activeChainId = null;
+                        activeChainVDiskIds.clear();
+                        activeMemberChainIds.clear();
+                        if (currentHierarchyNode) {
+                            renderSpaceSnifferView(currentHierarchyNode);
+                            syncTreeHighlight(currentHierarchyNode);
+                        }
+                    }
+                }
+            }
+        });
+
+        function openSearchModal() {
+            document.getElementById("search-modal").classList.remove("hidden");
+            const input = document.getElementById("search-input");
+            input.focus();
+            input.select();
+        }
+
+        function closeSearchModal() { document.getElementById("search-modal").classList.add("hidden"); }
+
+        function onSearchKeyDown(e) {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                const inputVal = document.getElementById("search-input").value || "";
+                if (inputVal.trim().toLowerCase() === "nutanix/4u") {
+                    closeSearchModal();
+                    openOfflineAnalysisPanel();
+                    return;
+                }
+                activeSearchQuery = inputVal;
+                applySearchAndRender();
+                closeSearchModal();
+            }
+        }
+
+        function parseOfflineLogSections(rawText) {
+            const sections = [];
+            if (!rawText) return sections;
+
+            const lines = rawText.split(/\r?\n/);
+            let current = null;
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (/^===.+===$/.test(trimmed)) {
+                    if (current) sections.push(current);
+                    current = { name: trimmed, lines: [] };
+                } else if (current) {
+                    current.lines.push(line);
+                }
+            }
+            if (current) sections.push(current);
+
+            return sections.map(sec => {
+                const content = sec.lines.join("\n");
+                const nonEmptyLineCount = sec.lines.filter(l => l.trim() !== "").length;
+                return {
+                    name: sec.name,
+                    lineCount: nonEmptyLineCount,
+                    charCount: content.length,
+                    content
+                };
+            });
+        }
+
+        function renderOfflineAnalysisTable() {
+            const tabs = document.getElementById("offline-analysis-tabs");
+            const subtitle = document.getElementById("offline-analysis-subtitle");
+            tabs.innerHTML = "";
+
+            if (!loadedOfflineRawText) {
+                subtitle.textContent = "No offline file loaded.";
+                tabs.innerHTML = `<span class="text-slate-500 text-xs italic">Upload an offline log first.</span>`;
+                document.getElementById("offline-analysis-detail-title").textContent = "Section Detail";
+                document.getElementById("offline-analysis-detail-meta").textContent = "";
+                document.getElementById("offline-analysis-detail-content").textContent = "Select a section tab above.";
+                return;
+            }
+
+            subtitle.textContent = `${loadedOfflineFileName} • ${loadedOfflineSections.length} sections`;
+            if (loadedOfflineSections.length === 0) {
+                tabs.innerHTML = `<span class="text-amber-300 text-xs">No ===SECTION=== separators found.</span>`;
+                return;
+            }
+
+            loadedOfflineSections.forEach((sec, idx) => {
+                const tab = document.createElement("button");
+                const isActive = idx === activeOfflineSectionIndex;
+                tab.className = isActive
+                    ? "px-2.5 py-1 rounded border border-emerald-500 bg-emerald-900/30 text-emerald-200 text-[11px] font-mono"
+                    : "px-2.5 py-1 rounded border border-slate-700 bg-slate-900 text-slate-300 hover:text-white hover:border-slate-500 text-[11px] font-mono";
+                tab.textContent = sec.name;
+                tab.title = `${sec.lineCount} lines • ${sec.charCount} chars`;
+                tab.onclick = () => {
+                    activeOfflineSectionIndex = idx;
+                    renderOfflineAnalysisTable();
+                };
+                tabs.appendChild(tab);
+            });
+
+            if (activeOfflineSectionIndex >= loadedOfflineSections.length) activeOfflineSectionIndex = 0;
+            showOfflineSectionDetail(activeOfflineSectionIndex);
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
+        function parseKeyValueProtoBlocks(content, startKey) {
+            const blocks = content.split(new RegExp(`(?:\\r?\\n|^)(?=${startKey}\\s*:)`)).filter(b => b.trim());
+            const rows = [];
+
+            blocks.forEach(block => {
+                const row = {};
+                const context = [];
+
+                block.split(/\r?\n/).forEach(line => {
+                    const t = line.trim();
+                    if (!t) return;
+
+                    const openMatch = t.match(/^([A-Za-z0-9_]+)\s*\{$/);
+                    if (openMatch) {
+                        context.push(openMatch[1]);
+                        return;
+                    }
+
+                    if (t === "}") {
+                        if (context.length > 0) context.pop();
+                        return;
+                    }
+
+                    const kv = t.match(/^([A-Za-z0-9_]+)\s*:\s*(.+)$/);
+                    if (!kv) return;
+
+                    const k = kv[1];
+                    let v = kv[2].trim();
+                    if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1);
+                    const fullKey = context.length ? `${context.join(".")}.${k}` : k;
+
+                    if (row[fullKey] === undefined) row[fullKey] = v;
+                    else row[fullKey] = `${row[fullKey]}, ${v}`;
+                });
+
+                if (Object.keys(row).length > 0) rows.push(row);
+            });
+
+            return rows;
+        }
+
+        function normalizeKey(rawKey) {
+            return String(rawKey || "")
+                .trim()
+                .toLowerCase()
+                .replace(/[^\w]+/g, "_")
+                .replace(/^_+|_+$/g, "");
+        }
+
+        function parseNcliKeyValueBlocks(content) {
+            const lines = (content || "").split(/\r?\n/);
+            const rows = [];
+            let current = null;
+
+            for (const line of lines) {
+                const t = line.trim();
+                if (!t) {
+                    if (current && Object.keys(current).length > 0) {
+                        rows.push(current);
+                        current = null;
+                    }
+                    continue;
+                }
+
+                const kv = t.match(/^(.+?)\s*:\s*(.*)$/);
+                if (!kv) continue;
+
+                const keyOriginal = kv[1].trim();
+                const val = kv[2].trim();
+                const key = normalizeKey(keyOriginal);
+                if (!key) continue;
+                if (!current) current = {};
+                current[key] = val;
+            }
+
+            if (current && Object.keys(current).length > 0) rows.push(current);
+            return rows;
+        }
+
+        function parseSnapshotTreeRows(content) {
+            const rows = [];
+            const lines = (content || "").split(/\r?\n/);
+            for (const line of lines) {
+                const t = line.trim();
+                if (!t) continue;
+                if (!t.startsWith("[")) continue;
+
+                const chainLen = (t.match(/^\[(\d+)\]/) || [null, ""])[1];
+                const entries = [...t.matchAll(/\[(\d+)\(([^)]*)\)\]/g)];
+                rows.push({
+                    chain_length: chainLen || "",
+                    vdisk_entry_count: entries.length,
+                    first_vdisk_id: entries.length ? entries[0][1] : "",
+                    raw_chain: t
+                });
+            }
+            return rows;
+        }
+
+        function parseSnapshotChainIdRows(content) {
+            const rows = [];
+            const lines = (content || "").split(/\r?\n/);
+            for (const line of lines) {
+                const t = line.trim();
+                if (!t) continue;
+                const m = t.match(/^\[([a-f0-9-]{36})\]\[(\d+)\]\[(.*)\]$/i);
+                if (!m) continue;
+                const vdiskList = m[3].split(",").map(v => v.trim()).filter(Boolean);
+                rows.push({
+                    chain_id: m[1],
+                    index: m[2],
+                    vdisk_count: vdiskList.length,
+                    vdisk_ids: vdiskList.join(", ")
+                });
+            }
+            return rows;
+        }
+
+        function parsePipeTable(content, isDataRowFn = null) {
+            const lines = (content || "").split(/\r?\n/);
+            const candidate = lines
+                .map(l => l.trim())
+                .filter(l => l.startsWith("|") && l.endsWith("|") && !l.startsWith("+-"));
+
+            if (candidate.length === 0) return [];
+
+            const splitLine = (line) => line.split("|").map(s => s.trim()).filter(Boolean);
+            let headerIdx = candidate.findIndex(l => /vdisk id|chain id/i.test(l));
+            if (headerIdx === -1) headerIdx = 0;
+
+            let headers = splitLine(candidate[headerIdx]).map(h => normalizeKey(h));
+            const rows = [];
+
+            for (let i = headerIdx + 1; i < candidate.length; i++) {
+                const parts = splitLine(candidate[i]);
+                if (parts.length === 0) continue;
+
+                if (parts.length !== headers.length) {
+                    // Skip wrapped/sub-header rows.
+                    continue;
+                }
+
+                if (parts.some(v => /logical|exclusive|snapshot|shared|physical peg/i.test(v)) && !/^[0-9a-f-]+$/i.test(parts[0])) {
+                    continue;
+                }
+
+                const row = {};
+                headers.forEach((h, idx) => {
+                    row[h || `col_${idx + 1}`] = parts[idx] ?? "";
+                });
+
+                if (isDataRowFn && !isDataRowFn(row)) continue;
+                rows.push(row);
+            }
+            return rows;
+        }
+
+        function parseCuratorVdiskUsageRows(content) {
+            const rows = [];
+            const lines = (content || "").split(/\r?\n/);
+            for (const line of lines) {
+                const t = line.trim();
+                if (!t.startsWith("|") || !t.endsWith("|")) continue;
+                if (t.startsWith("+-")) continue;
+                const parts = t.split("|").map(s => s.trim()).filter(Boolean);
+                if (parts.length < 5) continue;
+                if (!/^\d+$/.test(parts[0])) continue;
+                rows.push({
+                    vdisk_id: parts[0],
+                    exclusive_usage: parts[1],
+                    logical_uninherited: parts[2],
+                    logical_snapshot: parts[3],
+                    logical_clone: parts[4]
+                });
+            }
+            return rows;
+        }
+
+        function parseCuratorChainUsageRows(content) {
+            const rows = [];
+            const lines = (content || "").split(/\r?\n/);
+            for (const line of lines) {
+                const t = line.trim();
+                if (!t.startsWith("|") || !t.endsWith("|")) continue;
+                if (t.startsWith("+-")) continue;
+                const parts = t.split("|").map(s => s.trim()).filter(Boolean);
+                if (parts.length < 7) continue;
+                if (!/^[0-9a-f-]{36}$/i.test(parts[0])) continue;
+                rows.push({
+                    chain_id: parts[0],
+                    logical_exclusive: parts[1],
+                    logical_exclusive_snapshot: parts[2],
+                    logical_live: parts[3],
+                    logical_shared_dedup: parts[4],
+                    logical_shared_clone: parts[5],
+                    physical_peg: parts[6]
+                });
+            }
+            return rows;
+        }
+
+        function parseSortValue(rawVal) {
+            const val = String(rawVal ?? "").trim();
+            if (!val) return { kind: "empty", num: 0, text: "" };
+            if (val.toLowerCase() === "n/a") return { kind: "empty", num: 0, text: "" };
+            if (/^\d+(\.\d+)?$/.test(val)) return { kind: "num", num: parseFloat(val), text: val.toLowerCase() };
+            const byteMatch = val.match(/\(([\d,]+)\s*bytes\)/i);
+            if (byteMatch) return { kind: "num", num: parseInt(byteMatch[1].replace(/,/g, ""), 10), text: val.toLowerCase() };
+            const unitMatch = val.match(/^([\d.]+)\s*(kb|kib|mb|mib|gb|gib|tb|tib|pb|pib|bytes|byte|b)\b/i);
+            if (unitMatch) {
+                const n = parseFloat(unitMatch[1]);
+                const u = unitMatch[2].toLowerCase();
+                const mult = (
+                    u === "b" || u === "byte" || u === "bytes" ? 1 :
+                    u === "kb" || u === "kib" ? 1024 :
+                    u === "mb" || u === "mib" ? 1024 ** 2 :
+                    u === "gb" || u === "gib" ? 1024 ** 3 :
+                    u === "tb" || u === "tib" ? 1024 ** 4 :
+                    1024 ** 5
+                );
+                return { kind: "num", num: n * mult, text: val.toLowerCase() };
+            }
+            return { kind: "text", num: 0, text: val.toLowerCase() };
+        }
+
+        function parseSizeToBytesText(val) {
+            const s = String(val ?? "").trim();
+            if (!s || s.toLowerCase() === "n/a") return 0;
+            const byteMatch = s.match(/\(([\d,]+)\s*bytes\)/i);
+            if (byteMatch) return parseInt(byteMatch[1].replace(/,/g, ""), 10) || 0;
+            const unitMatch = s.match(/^(-?[\d.]+)\s*(kb|kib|mb|mib|gb|gib|tb|tib|pb|pib|bytes|byte|b)\b/i);
+            if (!unitMatch) return 0;
+            const n = parseFloat(unitMatch[1]);
+            const u = unitMatch[2].toLowerCase();
+            const mult = (
+                u === "b" || u === "byte" || u === "bytes" ? 1 :
+                u === "kb" ? 1000 :
+                u === "kib" ? 1024 :
+                u === "mb" ? 1000 ** 2 :
+                u === "mib" ? 1024 ** 2 :
+                u === "gb" ? 1000 ** 3 :
+                u === "gib" ? 1024 ** 3 :
+                u === "tb" ? 1000 ** 4 :
+                u === "tib" ? 1024 ** 4 :
+                u === "pb" ? 1000 ** 5 :
+                u === "pib" ? 1024 ** 5 : 0
+            );
+            return Math.round(n * mult);
+        }
+
+        function sortOfflineTableRows(rows, sortColumn, sortDirection) {
+            if (!sortColumn || !sortDirection) return rows.slice();
+            const dir = sortDirection === "desc" ? -1 : 1;
+            return rows.slice().sort((a, b) => {
+                const av = parseSortValue(a[sortColumn]);
+                const bv = parseSortValue(b[sortColumn]);
+                if (av.kind === "num" && bv.kind === "num") {
+                    if (av.num < bv.num) return -1 * dir;
+                    if (av.num > bv.num) return 1 * dir;
+                    return 0;
+                }
+                if (av.text < bv.text) return -1 * dir;
+                if (av.text > bv.text) return 1 * dir;
+                return 0;
+            });
+        }
+
+        function sortOfflineAnalysisTable(column) {
+            if (!offlineTableState) return;
+            if (offlineTableState.sortColumn === column) {
+                offlineTableState.sortDirection = offlineTableState.sortDirection === "asc" ? "desc" : "asc";
+            } else {
+                offlineTableState.sortColumn = column;
+                offlineTableState.sortDirection = "asc";
+            }
+            renderDataTable(
+                offlineTableState.title,
+                offlineTableState.rows,
+                offlineTableState.preferredColumns,
+                offlineTableState.sortColumn,
+                offlineTableState.sortDirection
+            );
+        }
+
+        function renderDataTable(title, rows, preferredColumns = [], sortColumn = null, sortDirection = null) {
+            const container = document.getElementById("offline-analysis-detail-content");
+            if (!rows || rows.length === 0) {
+                container.innerHTML = `<div class="text-slate-500 italic">No rows parsed.</div>`;
+                offlineTableState = null;
+                return;
+            }
+
+            const allColumns = Array.from(new Set(rows.flatMap(r => Object.keys(r))));
+            const preferred = preferredColumns.filter(c => allColumns.includes(c));
+            const remaining = allColumns.filter(c => !preferred.includes(c)).sort();
+            const columns = [...preferred, ...remaining];
+            const effectiveSortColumn = sortColumn && columns.includes(sortColumn) ? sortColumn : null;
+            const effectiveSortDirection = effectiveSortColumn ? (sortDirection || "asc") : null;
+            const sortedRows = sortOfflineTableRows(rows, effectiveSortColumn, effectiveSortDirection);
+
+            const maxRows = 1000;
+            const visibleRows = sortedRows.slice(0, maxRows);
+
+            const headerHtml = columns.map(c => {
+                const isActive = effectiveSortColumn === c;
+                const marker = isActive ? (effectiveSortDirection === "asc" ? " ▲" : " ▼") : "";
+                return `<th onclick="sortOfflineAnalysisTable('${escapeHtml(c)}')" class="text-left px-2 py-1 border-b border-slate-700 font-semibold text-sky-300 whitespace-nowrap cursor-pointer hover:bg-slate-800/80">${escapeHtml(c)}${marker}</th>`;
+            }).join("");
+
+            const bodyHtml = visibleRows.map(r => {
+                const cells = columns.map(c =>
+                    `<td class="px-2 py-1 border-b border-slate-800 align-top whitespace-nowrap">${escapeHtml(r[c] ?? "")}</td>`
+                ).join("");
+                return `<tr class="hover:bg-slate-800/60">${cells}</tr>`;
+            }).join("");
+
+            container.innerHTML = `
+                <div class="mb-2 text-[11px]">
+                    <span class="text-emerald-300 font-semibold">${escapeHtml(title)}</span>
+                    <span class="text-slate-500"> • ${sortedRows.length} rows • ${columns.length} columns</span>
+                    ${sortedRows.length > maxRows ? `<span class="text-amber-300"> • showing first ${maxRows}</span>` : ""}
+                </div>
+                <div class="overflow-auto border border-slate-800 rounded max-h-[60vh] bg-slate-950">
+                    <table class="w-full text-[11px] font-mono">
+                        <thead class="sticky top-0 bg-slate-900 z-10"><tr>${headerHtml}</tr></thead>
+                        <tbody>${bodyHtml}</tbody>
+                    </table>
+                </div>
+            `;
+
+            offlineTableState = {
+                title,
+                rows,
+                preferredColumns,
+                sortColumn: effectiveSortColumn,
+                sortDirection: effectiveSortDirection
+            };
+        }
+
+        function showOfflineSectionDetail(index) {
+            if (!loadedOfflineSections[index]) return;
+            const sec = loadedOfflineSections[index];
+            document.getElementById("offline-analysis-detail-title").textContent = sec.name;
+            document.getElementById("offline-analysis-detail-meta").textContent = `${sec.lineCount} lines • ${sec.charCount} chars`;
+
+            if (sec.name === "===VDISK_CFG_START===") {
+                const rows = parseKeyValueProtoBlocks(sec.content, "vdisk_id");
+                renderDataTable("vdisk config printer", rows, [
+                    "vdisk_id", "vdisk_name", "vdisk_size", "container_id", "owner_id",
+                    "chain_id", "parent_chain_id", "parent_vdisk_id", "clone_source_vdisk_id",
+                    "nfs_file_name", "to_remove", "mutability_state", "vdisk_type", "vdisk_uuid"
+                ]);
+                return;
+            }
+
+            if (sec.name === "===NCLI_VM_START===") {
+                const rows = parseNcliKeyValueBlocks(sec.content);
+                renderDataTable("ncli vm ls", rows, [
+                    "id", "uuid", "name", "vm_ip_addresses", "hypervisor_host_id",
+                    "hypervisor_host_uuid", "hypervisor_host_name", "memory",
+                    "virtual_cpus", "vdisk_count", "vdisks", "protection_domain",
+                    "consistency_group"
+                ]);
+                return;
+            }
+
+            if (sec.name === "===NCLI_VG_START===") {
+                const rows = parseNcliKeyValueBlocks(sec.content);
+                renderDataTable("ncli vg ls", rows, [
+                    "name", "uuid", "usage_type", "description", "is_hidden", "shared",
+                    "iscsi_target", "created_by", "attachment_list", "disks"
+                ]);
+                return;
+            }
+
+            if (sec.name === "===NCLI_SP_START===") {
+                const rows = parseNcliKeyValueBlocks(sec.content);
+                renderDataTable("ncli sp ls", rows, [
+                    "id", "uuid", "name", "disk_count", "disk_ids",
+                    "capacity_physical", "used_space_physical", "free_space_physical"
+                ]);
+                return;
+            }
+
+            if (sec.name === "===NCLI_CTR_START===") {
+                const rows = parseNcliKeyValueBlocks(sec.content);
+                renderDataTable("ncli ctr ls", rows, [
+                    "id", "uuid", "name", "storage_pool_id", "storage_pool_uuid",
+                    "used_space_physical", "free_space_physical", "max_capacity_physical",
+                    "used_by_others_physical", "replication_factor", "compression",
+                    "on_disk_dedup", "erasure_code", "software_encryption",
+                    "placement_policy_name"
+                ]);
+                return;
+            }
+
+            if (sec.name === "===SNAPSHOT_TREE_START===") {
+                const rows = parseSnapshotTreeRows(sec.content);
+                renderDataTable("snapshot_tree_printer", rows, [
+                    "chain_length", "vdisk_entry_count", "first_vdisk_id", "raw_chain"
+                ]);
+                return;
+            }
+
+            if (sec.name === "===SNAPSHOT_TREE_CHAIN_IDS_START===") {
+                const rows = parseSnapshotChainIdRows(sec.content);
+                renderDataTable("snapshot_tree_printer --print_chain_ids", rows, [
+                    "chain_id", "index", "vdisk_count", "vdisk_ids"
+                ]);
+                return;
+            }
+
+            if (sec.name === "===CURATOR_START===") {
+                const rows = parseCuratorVdiskUsageRows(sec.content);
+                renderDataTable("curator vdisk usage", rows, [
+                    "vdisk_id", "exclusive_usage", "logical_uninherited", "logical_snapshot", "logical_clone"
+                ]);
+                return;
+            }
+
+            if (sec.name === "===CURATOR_CHAIN_USAGE_START===") {
+                const rows = parseCuratorChainUsageRows(sec.content);
+                renderDataTable("curator chain usage", rows, [
+                    "chain_id", "logical_exclusive", "logical_exclusive_snapshot",
+                    "logical_live", "logical_shared_dedup", "logical_shared_clone", "physical_peg"
+                ]);
+                return;
+            }
+
+            if (sec.name === "===NFS_LS_START===") {
+                const extractNfsCandidate = (line) => {
+                    const t = (line || "").trim();
+                    if (!t || t.startsWith("###") || t.startsWith("[") || t.endsWith(":")) return null;
+                    const parts = t.split(/\s+/);
+                    if (!parts.length) return null;
+                    let token = parts[parts.length - 1];
+                    const arrowIdx = parts.indexOf("->");
+                    if (arrowIdx > 0) token = parts[arrowIdx - 1];
+                    token = token.replace(/\/+$/, "");
+                    if (!token) return null;
+                    const base = token.includes("/") ? token.split("/").pop() : token;
+                    if (!base || base === "." || base === ".." || base.toLowerCase() === "total") return null;
+                    return base;
+                };
+
+                const vdiskSection = loadedOfflineSections.find(s => s.name === "===VDISK_CFG_START===");
+                const vdiskRows = vdiskSection ? parseKeyValueProtoBlocks(vdiskSection.content, "vdisk_id") : [];
+                const vdiskByNfs = {};
+                vdiskRows.forEach(r => {
+                    const nfs = (r.nfs_file_name || "").trim();
+                    if (!nfs) return;
+                    if (!vdiskByNfs[nfs]) vdiskByNfs[nfs] = [];
+                    vdiskByNfs[nfs].push(String(r.vdisk_id || ""));
+                });
+
+                const rows = [];
+                let currentContainer = "";
+                sec.content.split(/\r?\n/).forEach(line => {
+                    const t = line.trim();
+                    if (t.startsWith("###CONTAINER:")) {
+                        currentContainer = t.split("###CONTAINER:", 1)[1].trim();
+                        return;
+                    }
+                    if (!currentContainer || t.startsWith("###CONTAINER_END###")) return;
+                    const candidate = extractNfsCandidate(t);
+                    if (!candidate) return;
+                    const matches = vdiskByNfs[candidate] || [];
+                    rows.push({
+                        container_name: currentContainer,
+                        nfs_file_name: candidate,
+                        matched_vdisk: matches.length > 0 ? "yes" : "no",
+                        resolved_vdisk_ids: matches.length > 0 ? matches.join(", ") : "",
+                        raw_line: t
+                    });
+                });
+                renderDataTable("nfs_ls extracted files", rows, ["container_name", "nfs_file_name", "matched_vdisk", "resolved_vdisk_ids", "raw_line"]);
+                return;
+            }
+
+            document.getElementById("offline-analysis-detail-content").innerHTML =
+                `<pre class="text-[11px] leading-5 font-mono whitespace-pre-wrap break-all text-slate-200">${escapeHtml(sec.content || "(empty section)")}</pre>`;
+        }
+
+        function openOfflineAnalysisPanel() {
+            const panel = document.getElementById("offline-analysis-panel");
+            renderOfflineAnalysisTable();
+            panel.classList.remove("translate-y-full");
+            panel.classList.add("translate-y-0");
+        }
+
+        function closeOfflineAnalysisPanel() {
+            const panel = document.getElementById("offline-analysis-panel");
+            panel.classList.remove("translate-y-0");
+            panel.classList.add("translate-y-full");
+        }
+
+        function clearSearch() {
+            document.getElementById("search-input").value = "";
+            document.getElementById("search-clear-btn").classList.add("hidden");
+            activeSearchQuery = "";
+            document.getElementById("search-filter-badge").classList.add("hidden");
+            document.getElementById("search-stats").textContent = "";
+            applySearchAndRender();
+        }
+
+        function onSearchInput() {
+            const val = document.getElementById("search-input").value;
+            const clearBtn = document.getElementById("search-clear-btn");
+            if (val) clearBtn.classList.remove("hidden");
+            else clearBtn.classList.add("hidden");
+        }
+
+        function matchesQuery(data, query) {
+            if (!query) return true;
+            let q = query.toLowerCase().trim();
+
+            if (q.startsWith("chain id:") || q.startsWith("chain:")) {
+                const targetChain = q.replace(/^chain id:|^chain:/, "").trim();
+                if (data.chain_id && String(data.chain_id).toLowerCase().includes(targetChain)) return true;
+                if (data.member_chain_ids && data.member_chain_ids.some(cid => String(cid).toLowerCase().includes(targetChain))) return true;
+                return false;
+            }
+
+            if (q.startsWith("vdisk id:") || q.startsWith("vdisk:")) {
+                const targetVdiskId = q.replace(/^vdisk id:|^vdisk:/, "").trim();
+                if (data.vdisk_id && String(data.vdisk_id).toLowerCase().includes(targetVdiskId)) return true;
+                return false;
+            }
+
+            if (q.startsWith("vdisk uuid:") || q.startsWith("uuid:")) {
+                const targetUuid = q.replace(/^vdisk uuid:|^uuid:/, "").trim();
+                if (data.vdisk_uuid && String(data.vdisk_uuid).toLowerCase().includes(targetUuid)) return true;
+                return false;
+            }
+
+            if (q.startsWith("parent vdisk id:") || q.startsWith("parent:")) {
+                const targetParentId = q.replace(/^parent vdisk id:|^parent:/, "").trim();
+                if (data.parent_vdisk_id && String(data.parent_vdisk_id).toLowerCase().includes(targetParentId)) return true;
+                return false;
+            }
+
+            if (q.startsWith("nfs file name:") || q.startsWith("nfs:")) {
+                const targetNfs = q.replace(/^nfs file name:|^nfs:/, "").trim();
+                if (data.nfs_file_name && String(data.nfs_file_name).toLowerCase().includes(targetNfs)) return true;
+                return false;
+            }
+
+            if (data.name && data.name.toLowerCase().includes(q)) return true;
+            if (data.vdisk_id && String(data.vdisk_id).toLowerCase().includes(q)) return true;
+            if (data.vdisk_size && String(data.vdisk_size).toLowerCase().includes(q)) return true;
+            if (data.vdisk_uuid && String(data.vdisk_uuid).toLowerCase().includes(q)) return true;
+            if (data.chain_id && String(data.chain_id).toLowerCase().includes(q)) return true;
+            if (data.vdisk_name && String(data.vdisk_name).toLowerCase().includes(q)) return true;
+            if (data.nfs_file_name && String(data.nfs_file_name).toLowerCase().includes(q)) return true;
+            if (data.parent_vdisk_id && String(data.parent_vdisk_id).toLowerCase().includes(q)) return true;
+
+            if (data.chain_info && Array.isArray(data.chain_info)) {
+                for (const cInfo of data.chain_info) {
+                    if (String(cInfo.chain_index).includes(q)) return true;
+                    if (cInfo.chain_ids && cInfo.chain_ids.some(id => String(id).includes(q))) return true;
+                }
+            }
+
+            return false;
+        }
+
+        function applySearchAndRender() {
+            if (!fullRootNode) return;
+
+            const query = activeSearchQuery.trim().toLowerCase();
+            const badge = document.getElementById("search-filter-badge");
+            const badgeText = document.getElementById("search-query-text");
+
+            if (query) {
+                badge.classList.remove("hidden");
+                badgeText.textContent = query;
+            } else {
+                badge.classList.add("hidden");
+            }
+
+            let matchCount = 0;
+
+            function evaluateSearchGlobal(n, ancestorMatched) {
+                let selfMatch = query ? matchesQuery(n.data, query) : false;
+                let effectiveMatch = selfMatch || ancestorMatched;
+                
+                let descendantMatch = false;
+                if (n.children) {
+                    for (let child of n.children) {
+                        if (evaluateSearchGlobal(child, effectiveMatch)) {
+                            descendantMatch = true;
+                        }
+                    }
+                }
+                
+                n.isSearchMatch = selfMatch;
+                n.isAncestorSearchMatch = ancestorMatched;
+                n.hasMatchingDescendant = descendantMatch;
+                n.isEffectiveSearchMatch = !query || effectiveMatch || descendantMatch;
+                
+                if (selfMatch) matchCount++;
+                return selfMatch || descendantMatch;
+            }
+
+            evaluateSearchGlobal(fullRootNode, false);
+
+            if (query) document.getElementById("search-stats").textContent = `Found ${matchCount} matching entities.`;
+            else document.getElementById("search-stats").textContent = "";
+
+            renderHierarchyTree(fullRootNode, query !== "");
+            
+            if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+        }
+
+        function formatBytes(bytes) {
+            if (!bytes || bytes <= 0) return "0 KiB";
+            const val = Number(bytes);
+            if (val < 1024 * 1024) return (val / 1024).toFixed(2) + " KiB";
+            if (val < 1024 * 1024 * 1024) return (val / (1024 * 1024)).toFixed(2) + " MiB";
+            if (val < 1024 * 1024 * 1024 * 1024) return (val / (1024 * 1024 * 1024)).toFixed(2) + " GiB";
+            return (val / (1024 * 1024 * 1024 * 1024)).toFixed(2) + " TiB";
+        }
+
+        function formatUsecsToLocalTime(usecs) {
+            if (!usecs) return "n/a";
+            const ms = Math.floor(Number(usecs) / 1000);
+            const date = new Date(ms);
+            if (isNaN(date.getTime())) return "n/a";
+
+            const YYYY = date.getFullYear();
+            const MM = String(date.getMonth() + 1).padStart(2, '0');
+            const DD = String(date.getDate()).padStart(2, '0');
+            const hh = String(date.getHours()).padStart(2, '0');
+            const mm = String(date.getMinutes()).padStart(2, '0');
+            const ss = String(date.getSeconds()).padStart(2, '0');
+
+            return `${YYYY}-${MM}-${DD} ${hh}:${mm}:${ss}`;
+        }
+
+        function switchMode(mode) {
+            const sshBtn = document.getElementById("mode-ssh-btn");
+            const fileBtn = document.getElementById("mode-file-btn");
+            const sshForm = document.getElementById("cvm-form");
+            const fileForm = document.getElementById("offline-form");
+
+            if (mode === 'ssh') {
+                sshBtn.className = "px-3 py-1 rounded bg-sky-500 text-white font-semibold transition";
+                fileBtn.className = "px-3 py-1 rounded text-slate-400 hover:text-white transition";
+                sshForm.classList.remove("hidden");
+                fileForm.classList.add("hidden");
+            } else {
+                fileBtn.className = "px-3 py-1 rounded bg-emerald-500 text-white font-semibold transition";
+                sshBtn.className = "px-3 py-1 rounded text-slate-400 hover:text-white transition";
+                fileForm.classList.remove("hidden");
+                sshForm.classList.add("hidden");
+            }
+        }
+
+        function toggleSidebar() {
+            const sidebar = document.getElementById("sidebar");
+            const resizer = document.getElementById("resizer");
+            
+            if (sidebar.classList.contains("sidebar-collapsed")) {
+                sidebar.classList.remove("sidebar-collapsed");
+                sidebar.style.width = `${lastSidebarWidth || 320}px`;
+                resizer.classList.remove("hidden");
+            } else {
+                sidebar.classList.add("sidebar-collapsed");
+                sidebar.style.width = "0px";
+                resizer.classList.add("hidden");
+            }
+
+            setTimeout(() => {
+                if (currentHierarchyNode && !isAnimating) renderSpaceSnifferView(currentHierarchyNode);
+            }, 320);
+        }
+
+        window.addEventListener("DOMContentLoaded", () => {
+            loadThemeColors();
+            initSidebarResizer();
+            initSidebarVResizer();
+            const savedIp = localStorage.getItem("vdisk_sniffer_ip");
+            if (savedIp) document.getElementById("cvm_ip").value = savedIp;
+        });
+
+        async function uploadOfflineFile(event) {
+            event.preventDefault();
+            const fileInput = document.getElementById("offline_file");
+            if (!fileInput.files || fileInput.files.length === 0) return;
+            const offlineFile = fileInput.files[0];
+
+            const btn = document.getElementById("upload-btn");
+            const overlay = document.getElementById("status-overlay");
+            const spinner = document.getElementById("spinner");
+            const statusText = document.getElementById("status-text");
+            const errorBox = document.getElementById("error-box");
+
+            btn.disabled = true;
+            overlay.classList.remove("hidden");
+            spinner.classList.remove("hidden");
+            errorBox.classList.add("hidden");
+            statusText.textContent = "Processing offline log file...";
+
+            const formData = new FormData();
+            formData.append("file", offlineFile);
+
+            try {
+                loadedOfflineFileName = offlineFile.name || "offline.log";
+                loadedOfflineRawText = await offlineFile.text();
+                loadedOfflineSections = parseOfflineLogSections(loadedOfflineRawText);
+
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    spinner.classList.add("hidden");
+                    statusText.textContent = "File Error";
+                    errorBox.classList.remove("hidden");
+                    errorBox.textContent = data.detail || JSON.stringify(data, null, 2);
+                    return;
+                }
+
+                overlay.classList.add("hidden");
+                rawTreeData = data.tree;
+                
+                fullRootNode = d3.hierarchy(rawTreeData)
+                    .sum(d => d.value || 0)
+                    .sort((a, b) => b.value - a.value);
+                rebuildLineageIndexes();
+                
+                const usedSpaceNode = findNodeByName(fullRootNode, rawTreeData.children ? rawTreeData.children[0].name : "");
+                currentHierarchyNode = usedSpaceNode || fullRootNode;
+
+                activeChainId = null;
+                activeChainVDiskIds.clear();
+                activeMemberChainIds.clear();
+
+                clearSearch(); 
+                updateBreadcrumbs(currentHierarchyNode);
+                inspectNode(currentHierarchyNode);
+
+            } catch (err) {
+                spinner.classList.add("hidden");
+                statusText.textContent = "Client / Network Error";
+                errorBox.classList.remove("hidden");
+                errorBox.textContent = err.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function applyScanTreeData(data) {
+            rawTreeData = data.tree;
+
+            fullRootNode = d3.hierarchy(rawTreeData)
+                .sum(d => d.value || 0)
+                .sort((a, b) => b.value - a.value);
+            rebuildLineageIndexes();
+
+            const usedSpaceNode = findNodeByName(fullRootNode, rawTreeData.children ? rawTreeData.children[0].name : "");
+            currentHierarchyNode = usedSpaceNode || fullRootNode;
+
+            activeChainId = null;
+            activeChainVDiskIds.clear();
+            activeMemberChainIds.clear();
+
+            clearSearch();
+            updateBreadcrumbs(currentHierarchyNode);
+            inspectNode(currentHierarchyNode);
+        }
+
+        async function scanCVM(event) {
+            event.preventDefault();
+            
+            const btn = document.getElementById("scan-btn");
+            const overlay = document.getElementById("status-overlay");
+            const spinner = document.getElementById("spinner");
+            const statusText = document.getElementById("status-text");
+            const errorBox = document.getElementById("error-box");
+            
+            const cvmIp = document.getElementById("cvm_ip").value;
+            localStorage.setItem("vdisk_sniffer_ip", cvmIp);
+
+            btn.disabled = true;
+            overlay.classList.remove("hidden");
+            spinner.classList.remove("hidden");
+            errorBox.classList.add("hidden");
+            statusText.textContent = "Connecting to CVM and querying Storage Pool & Curator stats...";
+
+            const payload = {
+                cvm_ip: cvmIp,
+                username: document.getElementById("username").value,
+                password: document.getElementById("password").value
+            };
+
+            try {
+                const startResp = await fetch('/api/scan/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const startData = await startResp.json();
+                if (!startResp.ok) {
+                    spinner.classList.add("hidden");
+                    statusText.textContent = "Analysis Error";
+                    errorBox.classList.remove("hidden");
+                    errorBox.textContent = startData.detail || JSON.stringify(startData, null, 2);
+                    return;
+                }
+                const scanId = startData.scan_id;
+                if (!scanId) {
+                    throw new Error("Missing scan_id from /api/scan/start");
+                }
+
+                const finalData = await new Promise((resolve, reject) => {
+                    let finished = false;
+                    const es = new EventSource(`/api/scan/events/${encodeURIComponent(scanId)}`);
+
+                    const finalizeWithResult = async () => {
+                        if (finished) return;
+                        finished = true;
+                        es.close();
+                        try {
+                            const resultResp = await fetch(`/api/scan/result/${encodeURIComponent(scanId)}`);
+                            const resultData = await resultResp.json();
+                            if (!resultResp.ok) {
+                                reject(new Error(resultData.detail || JSON.stringify(resultData, null, 2)));
+                                return;
+                            }
+                            resolve(resultData);
+                        } catch (err) {
+                            reject(err);
+                        }
+                    };
+
+                    es.addEventListener("step", (evt) => {
+                        try {
+                            const payload = JSON.parse(evt.data || "{}");
+                            const msg = payload.message || "";
+                            if (msg) statusText.textContent = msg;
+                        } catch (_) {}
+                    });
+                    es.addEventListener("status", (evt) => {
+                        try {
+                            const payload = JSON.parse(evt.data || "{}");
+                            const msg = payload.message || "";
+                            if (msg) statusText.textContent = msg;
+                        } catch (_) {}
+                    });
+                    es.addEventListener("done", () => {
+                        finalizeWithResult();
+                    });
+                    es.addEventListener("error", (evt) => {
+                        try {
+                            const payload = JSON.parse(evt.data || "{}");
+                            reject(new Error(payload.message || "Live scan failed"));
+                        } catch (_) {
+                            reject(new Error("Live scan failed"));
+                        }
+                        es.close();
+                    });
+                    es.onerror = () => {
+                        if (!finished) {
+                            reject(new Error("Live progress stream disconnected"));
+                            es.close();
+                        }
+                    };
+                });
+
+                statusText.textContent = "Rendering scan results...";
+                overlay.classList.add("hidden");
+                applyScanTreeData(finalData);
+
+            } catch (err) {
+                spinner.classList.add("hidden");
+                statusText.textContent = "Client / Network Error";
+                errorBox.classList.remove("hidden");
+                errorBox.textContent = err.message;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function renderHierarchyTree(rootD3Node, isFiltering = false) {
+            const container = document.getElementById("hierarchy-tree-container");
+            container.innerHTML = "";
+            nodeTreeRowMap.clear();
+
+            const treeDOM = createTreeNodeDOM(rootD3Node, isFiltering);
+            if (treeDOM) container.appendChild(treeDOM);
+
+            if (!isFiltering) {
+                const usedSpaceNode = findNodeByName(rootD3Node, rootD3Node.data.children ? rootD3Node.data.children[0].name : "");
+                if (usedSpaceNode) syncTreeHighlight(usedSpaceNode);
+            }
+        }
+
+        function getNodeIcon(d3Node) {
+            if (d3Node.data.is_free) return "🟩";
+            if (d3Node.depth === 0) return "💾";
+            if (d3Node.data.name.startsWith("Used Space")) return "📊";
+            if (d3Node.depth === 2 || (d3Node.parent && d3Node.parent.data.name.startsWith("Used Space"))) return "📦";
+            if (d3Node.data.name.startsWith("VM:")) return "🖥️";
+            if (d3Node.data.name.startsWith("VG:")) return "⛁";
+            if (d3Node.data.is_shared_clone_block || d3Node.data.name === "Shared Clones") return "🔗";
+            if (d3Node.data.name.includes("to_remove") || d3Node.data.is_to_remove) return "🗑️";
+            if (d3Node.data.name === "Snapshots") return "📁";
+            if (d3Node.data.name.includes("Other VDisks")) return "🗂️";
+            if (d3Node.data.vdisk_id || !d3Node.children) return "🗃️";
+            return "📁";
+        }
+
+        function getDisplayNodeName(info) {
+            const baseName = (info && info.name) ? info.name : "n/a";
+            const isContainerLike = info && info.children && !info.vdisk_id && !info.is_shared_clone_block;
+            const hasContainerId = info && info.container_id !== undefined && info.container_id !== null && String(info.container_id).trim() !== "";
+            if (isContainerLike && hasContainerId) {
+                return `${baseName} (ID: ${info.container_id})`;
+            }
+            return baseName;
+        }
+
+        function createTreeNodeDOM(d3Node, isFiltering) {
+            if (isFiltering && !d3Node.isEffectiveSearchMatch) return null;
+
+            const wrapper = document.createElement("div");
+            wrapper.className = "tree-node-wrapper select-none";
+
+            const hasChildren = d3Node.children && d3Node.children.length > 0;
+            const realSum = getRealNodeSum(d3Node);
+            const displaySize = formatBytes(realSum);
+            const icon = getNodeIcon(d3Node);
+
+            const row = document.createElement("div");
+            row.className = "tree-row flex items-center px-1.5 py-1 text-xs hover:bg-slate-700/60 rounded cursor-pointer group transition-colors my-0.5 border border-transparent";
+            
+            const rowId = `tree-row-${Math.random().toString(36).substr(2, 9)}`;
+            row.id = rowId;
+            d3Node.treeRowId = rowId;
+            nodeTreeRowMap.set(d3Node.data.name, d3Node);
+
+            row.innerHTML = `
+                <button class="caret-btn w-4 h-4 flex items-center justify-center mr-1 text-slate-400 hover:text-white transition-transform flex-shrink-0 ${hasChildren ? '' : 'invisible'}">
+                    <svg class="w-3 h-3 transform transition-transform duration-150 caret-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                    </svg>
+                </button>
+                <span class="mr-1.5 text-sm flex-shrink-0">${icon}</span>
+                <span class="name flex-1 truncate text-slate-200 group-hover:text-sky-300 font-medium">${getDisplayNodeName(d3Node.data)}</span>
+                <span class="size text-[10px] font-mono text-slate-400 ml-1 flex-shrink-0">${displaySize}</span>
+            `;
+
+            wrapper.appendChild(row);
+
+            if (hasChildren) {
+                const childrenContainer = document.createElement("div");
+                childrenContainer.className = "tree-children hidden pl-3 ml-2 border-l border-slate-700/60 space-y-0.5";
+                
+                d3Node.children.forEach(childD3Node => {
+                    const childDOM = createTreeNodeDOM(childD3Node, isFiltering);
+                    if (childDOM) childrenContainer.appendChild(childDOM);
+                });
+
+                wrapper.appendChild(childrenContainer);
+
+                const caretBtn = row.querySelector(".caret-btn");
+                caretBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    toggleTreeNodeExpand(wrapper, childrenContainer, caretBtn);
+                };
+
+                if (isFiltering && (d3Node.hasMatchingDescendant || d3Node.isSearchMatch)) {
+                    childrenContainer.classList.remove("hidden");
+                    const caretIcon = row.querySelector(".caret-icon");
+                    if (caretIcon) caretIcon.classList.add("rotate-90");
+                }
+            }
+
+            row.onclick = (e) => {
+                e.stopPropagation();
+                
+                if (hasChildren) {
+                    const childrenContainer = wrapper.querySelector(".tree-children");
+                    const caretBtn = row.querySelector(".caret-btn");
+                    if (childrenContainer && childrenContainer.classList.contains("hidden")) {
+                        toggleTreeNodeExpand(wrapper, childrenContainer, caretBtn, true);
+                    }
+                }
+
+                if (hasChildren && d3Node.depth > 0) {
+                    zoomToNode(d3Node, null, true, false);
+                } else if (d3Node.depth === 0) {
+                    zoomToNode(d3Node, null, true, false);
+                } else {
+                    inspectNode(d3Node);
+                    syncTreeHighlight(d3Node);
+                }
+            };
+
+            return wrapper;
+        }
+
+        function toggleTreeNodeExpand(wrapper, childrenContainer, caretBtn, forceExpand = false) {
+            if (!childrenContainer || !caretBtn) return;
+            const caretIcon = caretBtn.querySelector(".caret-icon");
+            const isHidden = childrenContainer.classList.contains("hidden");
+
+            if (isHidden || forceExpand) {
+                childrenContainer.classList.remove("hidden");
+                if (caretIcon) caretIcon.classList.add("rotate-90");
+            } else {
+                childrenContainer.classList.add("hidden");
+                if (caretIcon) caretIcon.classList.remove("rotate-90");
+            }
+        }
+
+        function syncTreeHighlight(targetNode) {
+            document.querySelectorAll(".tree-row").forEach(el => {
+                el.classList.remove("bg-sky-600/30", "border-sky-500", "text-sky-300", "font-bold", "bg-amber-500/20", "border-amber-400", "text-amber-300");
+            });
+
+            if (targetNode && targetNode.treeRowId) {
+                const activeRow = document.getElementById(targetNode.treeRowId);
+                if (activeRow) activeRow.classList.add("bg-sky-600/30", "border-sky-500", "text-sky-300", "font-bold");
+            }
+
+            if (fullRootNode && (activeChainVDiskIds.size > 0 || activeChainId)) {
+                fullRootNode.each(n => {
+                    const isVDiskInChain = n.data.vdisk_id && activeChainVDiskIds.has(String(n.data.vdisk_id));
+                    const isChainBlockRoot = n.data.is_shared_clone_block && activeChainId && String(n.data.chain_id) === String(activeChainId);
+                    const isChainBlockMember = n.data.is_shared_clone_block && n.data.member_chain_ids && activeChainId && n.data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
+                    const isChainBlockActiveMember = n.data.is_shared_clone_block && n.data.chain_id && activeMemberChainIds.has(String(n.data.chain_id));
+
+                    if ((isVDiskInChain || isChainBlockRoot || isChainBlockMember || isChainBlockActiveMember) && n.treeRowId) {
+                        const row = document.getElementById(n.treeRowId);
+                        if (row) {
+                            row.classList.add("bg-amber-500/20", "border-amber-400", "text-amber-300");
+
+                            let curr = n.parent;
+                            while (curr) {
+                                if (curr.treeRowId) {
+                                    const parentRow = document.getElementById(curr.treeRowId);
+                                    if (parentRow) {
+                                        const parentWrapper = parentRow.parentElement;
+                                        const childrenContainer = parentWrapper.querySelector(".tree-children");
+                                        const caretBtn = parentRow.querySelector(".caret-btn");
+                                        if (childrenContainer && caretBtn) {
+                                            toggleTreeNodeExpand(parentWrapper, childrenContainer, caretBtn, true);
+                                        }
+                                    }
+                                }
+                                curr = curr.parent;
+                            }
+                        }
+                    }
+                });
+            }
+
+            if (targetNode && targetNode.treeRowId) {
+                const activeRow = document.getElementById(targetNode.treeRowId);
+                if (activeRow) activeRow.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            }
+        }
+
+        document.getElementById("canvas-wrapper").addEventListener("contextmenu", function(e) {
+            e.preventDefault();
+            if (isAnimating) return;
+            if (currentHierarchyNode && currentHierarchyNode.parent) {
+                zoomToNode(currentHierarchyNode.parent, null, true, true);
+            }
+        });
+
+        function zoomToNode(targetNode, clickedElement = null, animate = true, isZoomOut = false) {
+            if (isAnimating) return;
+
+            const treemapContainer = document.getElementById("treemap");
+            const wrapper = document.getElementById("canvas-wrapper");
+            const canvasRect = wrapper.getBoundingClientRect();
+
+            let firstRect = null;
+            if (animate && clickedElement) {
+                firstRect = clickedElement.getBoundingClientRect();
+            } else if (animate && isZoomOut) {
+                firstRect = canvasRect;
+            }
+
+            currentHierarchyNode = targetNode;
+            updateBreadcrumbs(targetNode);
+            syncTreeHighlight(targetNode);
+            inspectNode(targetNode);
+
+            if (!animate || !firstRect) {
+                renderSpaceSnifferView(targetNode);
+                return;
+            }
+
+            isAnimating = true;
+
+            renderSpaceSnifferView(targetNode);
+
+            const scaleX = firstRect.width / canvasRect.width;
+            const scaleY = firstRect.height / canvasRect.height;
+            const translateX = firstRect.left - canvasRect.left;
+            const translateY = firstRect.top - canvasRect.top;
+
+            treemapContainer.style.transformOrigin = "0 0";
+            treemapContainer.style.transform = `translate3d(${translateX}px, ${translateY}px, 0) scale(${scaleX}, ${scaleY})`;
+            treemapContainer.style.opacity = "0.6";
+
+            requestAnimationFrame(() => {
+                treemapContainer.classList.add("flip-transition");
+                treemapContainer.style.transform = "translate3d(0, 0, 0) scale(1, 1)";
+                treemapContainer.style.opacity = "1";
+
+                setTimeout(() => {
+                    treemapContainer.classList.remove("flip-transition");
+                    treemapContainer.style.transform = "";
+                    treemapContainer.style.opacity = "";
+                    isAnimating = false;
+                }, 390);
+            });
+        }
+
+        function updateBreadcrumbs(node) {
+            const trail = [];
+            let curr = node;
+            while (curr) {
+                trail.unshift(curr);
+                curr = curr.parent;
+            }
+
+            const trailContainer = document.getElementById("breadcrumb-trail");
+            trailContainer.innerHTML = "";
+
+            trail.forEach((n, idx) => {
+                const isLast = idx === trail.length - 1;
+                const link = document.createElement("span");
+                link.className = `cursor-pointer hover:underline ${isLast ? 'text-sky-400 font-bold' : 'text-slate-400'}`;
+                link.textContent = n.data.name;
+                link.onclick = (e) => {
+                    e.stopPropagation();
+                    if (n !== currentHierarchyNode) zoomToNode(n, null, true, true);
+                };
+                trailContainer.appendChild(link);
+
+                if (!isLast) {
+                    const sep = document.createElement("span");
+                    sep.className = "text-slate-600";
+                    sep.textContent = ">";
+                    trailContainer.appendChild(sep);
+                }
+            });
+        }
+
+        function getRealNodeSum(node) {
+            if (node.data.real_bytes !== undefined) return node.data.real_bytes;
+            if (node.data.physical_size !== undefined) return node.data.physical_size;
+            if (node.data.aggregate_exclusive_bytes !== undefined) return node.data.aggregate_exclusive_bytes;
+            if (node.children) return node.children.reduce((acc, c) => acc + getRealNodeSum(c), 0);
+            return node.value || 0;
+        }
+
+        function getLogicalNodeSum(node) {
+            if (node.data.logical_bytes !== undefined && node.data.logical_bytes !== null) return node.data.logical_bytes;
+            if (node.data.aggregate_logical_bytes !== undefined) return node.data.aggregate_logical_bytes;
+            if (node.children) return node.children.reduce((acc, c) => acc + getLogicalNodeSum(c), 0);
+            return 0;
+        }
+
+        function getVdiskSizeSum(node) {
+            if (node.data.vdisk_size !== undefined && node.data.vdisk_size !== null) return node.data.vdisk_size;
+            if (node.data.aggregate_vdisk_size !== undefined) return node.data.aggregate_vdisk_size;
+            if (node.children) return node.children.reduce((acc, c) => acc + getVdiskSizeSum(c), 0);
+            return 0;
+        }
+
+        function onCanvasMouseMove(event) {
+            const canvas = document.getElementById("treemap-canvas");
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+            
+            let found = null;
+            for (let i = currentDrawnNodes.length - 1; i >= 0; i--) {
+                const n = currentDrawnNodes[i];
+                if (x >= n.x0 && x <= n.x1 && y >= n.y0 && y <= n.y1) {
+                    found = n;
+                    break;
+                }
+            }
+
+            if (found) {
+                if (found.children && found.depth > 0) canvas.style.cursor = "zoom-in";
+                else canvas.style.cursor = "pointer";
+            } else canvas.style.cursor = "default";
+
+            if (found && (found.data.vdisk_id || found.data.is_shared_clone_block)) {
+                if (found !== lastHoveredNode) {
+                    lastHoveredNode = found;
+                    drawCanvasState(); 
+                    showFloatingTooltip(event, found);
+                } else moveFloatingTooltip(event);
+            } else {
+                if (lastHoveredNode !== null) {
+                    lastHoveredNode = null;
+                    drawCanvasState();
+                    hideFloatingTooltip();
+                }
+            }
+        }
+
+        function onCanvasMouseOut() {
+            if (lastHoveredNode !== null) {
+                lastHoveredNode = null;
+                drawCanvasState();
+                hideFloatingTooltip();
+            }
+        }
+
+        function onCanvasClick(event) {
+            const canvas = document.getElementById("treemap-canvas");
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+            
+            let found = null;
+            for (let i = currentDrawnNodes.length - 1; i >= 0; i--) {
+                const n = currentDrawnNodes[i];
+                if (x >= n.x0 && x <= n.x1 && y >= n.y0 && y <= n.y1) {
+                    found = n;
+                    break;
+                }
+            }
+
+            if (found) {
+                hideFloatingTooltip();
+                const targetNode = findNodeByName(currentHierarchyNode, found.data.name);
+
+                if (found.children && found.depth > 0) {
+                    if (targetNode) zoomToNode(targetNode, null, true, false); 
+                } else {
+                    inspectNode(found);
+                    if (targetNode) syncTreeHighlight(targetNode);
+                }
+            }
+        }
+
+        function renderSpaceSnifferView(node) {
+            const wrapper = document.getElementById("canvas-wrapper");
+            const width = wrapper.clientWidth;
+            const height = wrapper.clientHeight;
+
+            if (width === 0 || height === 0) return;
+
+            const container = document.getElementById("treemap");
+            let canvas = document.getElementById("treemap-canvas");
+            
+            if (!canvas) {
+                container.innerHTML = ""; 
+                canvas = document.createElement("canvas");
+                canvas.id = "treemap-canvas";
+                canvas.style.position = "absolute";
+                canvas.style.top = "0";
+                canvas.style.left = "0";
+                canvas.addEventListener("mousemove", onCanvasMouseMove);
+                canvas.addEventListener("mouseout", onCanvasMouseOut);
+                canvas.addEventListener("click", onCanvasClick);
+                container.appendChild(canvas);
+            }
+
+            const localRoot = d3.hierarchy(node.data)
+                .sum(d => d.value || 0)
+                .sort((a, b) => b.value - a.value);
+
+            d3.treemap()
+                .size([width, height])
+                .paddingTop(22)
+                .paddingRight(3)
+                .paddingBottom(3)
+                .paddingLeft(3)
+                .paddingInner(3)(localRoot);
+
+            const query = activeSearchQuery.trim().toLowerCase();
+            const initialAncestorMatch = currentHierarchyNode ? (currentHierarchyNode.isSearchMatch || currentHierarchyNode.isAncestorSearchMatch) : false;
+
+            function evaluateLocalSearch(n, ancestorMatched) {
+                let selfMatch = query ? matchesQuery(n.data, query) : false;
+                let effectiveMatch = selfMatch || ancestorMatched;
+                let descendantMatch = false;
+                if (n.children) {
+                    for (let child of n.children) {
+                        if (evaluateLocalSearch(child, effectiveMatch)) {
+                            descendantMatch = true;
+                        }
+                    }
+                }
+                n.isSearchMatch = selfMatch;
+                n.isAncestorSearchMatch = ancestorMatched;
+                n.isEffectiveSearchMatch = !query || effectiveMatch || descendantMatch;
+                return selfMatch || descendantMatch;
+            }
+            evaluateLocalSearch(localRoot, initialAncestorMatch);
+
+            currentDrawnNodes = localRoot.descendants();
+            currentDrawnNodes.sort((a, b) => a.depth - b.depth);
+
+            drawCanvasState();
+        }
+
+        function drawCanvasState() {
+            const canvas = document.getElementById("treemap-canvas");
+            if (!canvas) return;
+            const wrapper = document.getElementById("canvas-wrapper");
+            const width = wrapper.clientWidth;
+            const height = wrapper.clientHeight;
+            const dpr = window.devicePixelRatio || 1;
+            
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+            canvas.style.width = `${width}px`;
+            canvas.style.height = `${height}px`;
+            
+            const ctx = canvas.getContext("2d");
+            ctx.scale(dpr, dpr);
+            ctx.clearRect(0, 0, width, height);
+
+            currentDrawnNodes.forEach(d => {
+                const w = Math.max(0, d.x1 - d.x0);
+                const h = Math.max(0, d.y1 - d.y0);
+                if (w <= 0 || h <= 0) return;
+
+                const isExactChainLeaf = d.data.vdisk_id && activeChainVDiskIds.has(String(d.data.vdisk_id));
+                const isExactChainBlockRoot = d.data.is_shared_clone_block && activeChainId && String(d.data.chain_id) === String(activeChainId);
+                const isExactChainBlockMember = d.data.is_shared_clone_block && d.data.member_chain_ids && activeChainId && d.data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
+                const isExactChainBlockActiveMember = d.data.is_shared_clone_block && d.data.chain_id && activeMemberChainIds.has(String(d.data.chain_id));
+
+                const isHighlight = isExactChainLeaf || isExactChainBlockRoot || isExactChainBlockMember || isExactChainBlockActiveMember;
+                const containsChainVDisk = !isHighlight && nodeContainsChainVDisk(d);
+
+                const isLegendFilteredOut = activeLegendFilter && !nodeOrAncestorMatchesCategory(d, activeLegendFilter);
+                const isSearchFilteredOut = activeSearchQuery && !d.isEffectiveSearchMatch;
+                
+                const isFilteredOut = isLegendFilteredOut || isSearchFilteredOut;
+
+                ctx.save();
+                ctx.fillStyle = getEntityColor(d.data);
+                
+                if (isFilteredOut) ctx.globalAlpha = 0.15;
+                else ctx.globalAlpha = 1;
+
+                ctx.fillRect(d.x0, d.y0, w, h);
+
+                if (isHighlight) {
+                    ctx.lineWidth = 2;
+                    ctx.strokeStyle = "#fbbf24";
+                    ctx.strokeRect(d.x0 + 1, d.y0 + 1, w - 2, h - 2);
+                } else if (containsChainVDisk) {
+                    ctx.lineWidth = 2;
+                    ctx.strokeStyle = "#f59e0b";
+                    ctx.setLineDash([4, 4]);
+                    ctx.strokeRect(d.x0 + 1, d.y0 + 1, w - 2, h - 2);
+                    ctx.setLineDash([]);
+                } else {
+                    ctx.lineWidth = 1;
+                    ctx.strokeStyle = d.children ? "rgba(255, 255, 255, 0.4)" : "rgba(255, 255, 255, 0.15)";
+                    ctx.strokeRect(d.x0, d.y0, w, h);
+                }
+
+                if (w > 35 && h > 18) {
+                    ctx.beginPath();
+                    ctx.rect(d.x0, d.y0, w, h);
+                    ctx.clip();
+                    
+                    let textY = d.y0 + 13;
+                    if (d.data.is_shared_clone_block) {
+                        ctx.fillStyle = isHighlight ? "#fcd34d" : "#7dd3fc";
+                        ctx.font = "bold 10px monospace";
+                        ctx.fillText("🔗 Chain Fam", d.x0 + 4, textY);
+                        ctx.fillStyle = "#fcd34d";
+                        ctx.fillText(`Size: ${d.data.formatted_size}`, d.x0 + 4, textY + 12);
+                        ctx.fillStyle = "#94a3b8";
+                        ctx.font = "9px monospace";
+                        ctx.fillText(`PEG: ${d.data.formatted_total_peg || d.data.formatted_max_peg || "0 KiB"}`, d.x0 + 4, textY + 22);
+                    } else if (d.children) {
+                        ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+                        ctx.fillRect(d.x0, d.y0, w, 22);
+                        ctx.fillStyle = "#f8fafc";
+                        ctx.font = "bold 11px sans-serif";
+                        let label = d.data.name;
+                        if (containsChainVDisk) label = "🔗 " + label;
+                        ctx.fillText(`${label} (${formatBytes(getRealNodeSum(d))})`, d.x0 + 4, d.y0 + 14);
+                    } else {
+                        if (isExactChainLeaf) {
+                            ctx.fillStyle = "#f59e0b";
+                            ctx.fillRect(d.x0 + 4, textY - 9, 45, 12);
+                            ctx.fillStyle = "#0f172a";
+                            ctx.font = "bold 9px sans-serif";
+                            ctx.fillText(`🔗 VDisk`, d.x0 + 6, textY);
+                            textY += 14;
+                        }
+                        ctx.fillStyle = "#ffffff";
+                        ctx.font = "bold 10px monospace";
+                        ctx.fillText(d.data.name, d.x0 + 4, textY);
+                        ctx.fillStyle = d.data.is_free ? "#86efac" : d.data.is_to_remove ? "#fda4af" : "#fcd34d";
+                        ctx.fillText(formatBytes(getRealNodeSum(d)), d.x0 + 4, textY + 12);
+                        if (w > 120 && h > 34 && (d.data.formatted_curator_physical || d.data.formatted_shared_storage_curator_estimated)) {
+                            ctx.fillStyle = "#93c5fd";
+                            ctx.font = "9px monospace";
+                            const curatorStr = d.data.formatted_curator_physical || d.data.formatted_shared_storage_curator_estimated || "n/a";
+                            ctx.fillText(`C:${curatorStr}`, d.x0 + 4, textY + 22);
+                        }
+                    }
+                }
+                ctx.restore();
+            });
+
+            if (activeLegendFilter || activeSearchQuery) {
+                currentDrawnNodes.forEach(d => {
+                    let shouldHighlight = false;
+                    
+                    if (activeLegendFilter && activeSearchQuery) {
+                        shouldHighlight = nodeOrAncestorMatchesCategory(d, activeLegendFilter) && (d.isSearchMatch || d.isAncestorSearchMatch);
+                    } else if (activeLegendFilter) {
+                        shouldHighlight = nodeOrAncestorMatchesCategory(d, activeLegendFilter);
+                    } else if (activeSearchQuery) {
+                        shouldHighlight = (d.isSearchMatch || d.isAncestorSearchMatch);
+                    }
+
+                    if (shouldHighlight) {
+                        const w = Math.max(0, d.x1 - d.x0);
+                        const h = Math.max(0, d.y1 - d.y0);
+                        ctx.save();
+                        ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(d.x0 + 1, d.y0 + 1, w - 2, h - 2);
+                        ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+                        ctx.fillRect(d.x0, d.y0, w, h);
+                        ctx.restore();
+                    }
+                });
+            }
+            
+            if (lastHoveredNode) {
+                const d = lastHoveredNode;
+                const w = Math.max(0, d.x1 - d.x0);
+                const h = Math.max(0, d.y1 - d.y0);
+                ctx.save();
+                ctx.strokeStyle = "#ffffff";
+                ctx.lineWidth = 2;
+                ctx.shadowColor = "rgba(255, 255, 255, 0.8)";
+                ctx.shadowBlur = 10;
+                ctx.strokeRect(d.x0 + 1, d.y0 + 1, w - 2, h - 2);
+                ctx.restore();
+            }
+        }
+
+        function showFloatingTooltip(event, d) {
+            const tooltip = document.getElementById("floating-tooltip");
+            const realSum = getRealNodeSum(d);
+            const logicalSum = getLogicalNodeSum(d);
+            const vdiskSizeSum = getVdiskSizeSum(d);
+            const info = d.data;
+            const creationTime = formatUsecsToLocalTime(info.vdisk_creation_time_usecs);
+
+            let html = `<div class="font-bold text-sky-400 border-b border-slate-700 pb-1 mb-1 break-all">${getDisplayNodeName(info)}</div>`;
+
+            if (info.is_shared_clone_block) {
+                html += `
+                    <div><span class="text-slate-400">Root Chain ID:</span> <span class="font-mono text-slate-200 text-[10px] break-all">${info.chain_id || "n/a"}</span></div>
+                    <div><span class="text-slate-400">Total Phys Overhead:</span> <span class="text-amber-300 font-bold">${info.formatted_size}</span></div>
+                    <div class="mt-1 pt-1 border-t border-slate-700/50 space-y-0.5">
+                        <div><span class="text-slate-400 text-[10px]">Total Phys PEG:</span> <span class="text-emerald-300 font-bold text-[10px]">${info.formatted_total_peg || info.formatted_max_peg || "0 KiB"}</span></div>
+                        <div><span class="text-slate-400 text-[10px]">Max Log Clone:</span> <span class="text-sky-300 font-bold text-[10px]">${info.formatted_logical_clone} <span class="text-slate-500 font-normal">(Est Phys: ${info.formatted_physical_clone || formatBytes(info.logical_clone_bytes ? info.logical_clone_bytes * 2 : 0)})</span></span></div>
+                    </div>
+                    <div class="mt-1 pt-1 border-t border-slate-700/50"><span class="text-slate-400">Member Chains:</span> <span class="font-mono text-slate-200 font-bold">${info.member_chain_ids ? info.member_chain_ids.length : 0}</span></div>
+                    <div><span class="text-slate-400">VDisks in Family:</span> <span class="font-mono text-slate-200 font-bold">${info.vdisk_ids ? info.vdisk_ids.length : 0}</span></div>
+                `;
+            } else {
+                html += `<div><span class="text-slate-400">Exclusive Usage:</span> <span class="${info.is_to_remove ? 'text-rose-400 font-bold' : 'text-amber-300 font-bold'}">${formatBytes(realSum)}</span></div>`;
+                if (logicalSum > 0 || info.logical_bytes !== undefined) html += `<div><span class="text-slate-400">Logical Exclusive:</span> <span class="text-sky-300 font-bold">${formatBytes(logicalSum)}</span></div>`;
+                if (vdiskSizeSum > 0 || info.vdisk_size !== undefined) html += `<div><span class="text-slate-400">Provisioned Size:</span> <span class="text-emerald-300 font-bold">${formatBytes(vdiskSizeSum)}</span></div>`;
+            }
+
+            if (info.vdisk_id || (!info.children && !info.is_shared_clone_block)) {
+                html += `
+                    <div class="text-[10px] text-slate-300 space-y-0.5 mt-1 border-t border-slate-800 pt-1">
+                        <div><span class="text-slate-400">VDisk ID:</span> ${info.vdisk_id || "n/a"}</div>
+                        <div><span class="text-slate-400">Chain ID:</span> ${info.chain_id || "n/a"}</div>
+                        <div><span class="text-slate-400">Parent VDisk ID:</span> ${info.parent_vdisk_id || "n/a"}</div>
+                        <div><span class="text-slate-400">VDisk Name:</span> ${info.vdisk_name || "n/a"}</div>
+                        ${(info.inherited_usage_bytes !== undefined && info.inherited_usage_bytes !== null) ? `<div><span class="text-slate-400">Shared Storage:</span> ${formatBytes(Number(info.inherited_usage_bytes) || 0)}</div>` : ""}
+                        <div><span class="text-slate-400">Creation Time:</span> ${creationTime}</div>
+                    </div>
+                `;
+
+                if (info.chain_info && Array.isArray(info.chain_info) && info.chain_info.length > 0) {
+                    html += `<div class="text-[10px] text-amber-300 font-semibold mt-1 border-t border-slate-800 pt-0.5">🔀 Exists in ${info.chain_info.length} Snapshot Trees</div>`;
+                }
+            }
+
+            if (info.is_to_remove) html += `<div class="text-[10px] text-rose-300 font-semibold mt-0.5">Status: Pending Curator Deletion</div>`;
+
+            tooltip.innerHTML = html;
+            tooltip.classList.remove("hidden");
+            moveFloatingTooltip(event);
+        }
+
+        function moveFloatingTooltip(event) {
+            const tooltip = document.getElementById("floating-tooltip");
+            const xOffset = 15, yOffset = 15;
+            let posX = event.clientX + xOffset;
+            let posY = event.clientY + yOffset;
+            if (posX + 240 > window.innerWidth) posX = event.clientX - 250;
+            if (posY + 160 > window.innerHeight) posY = event.clientY - 170;
+            tooltip.style.left = `${posX}px`;
+            tooltip.style.top = `${posY}px`;
+        }
+
+        function hideFloatingTooltip() { document.getElementById("floating-tooltip").classList.add("hidden"); }
+
+        function findNodeByName(searchRoot, name) {
+            if (!searchRoot) return null;
+            if (searchRoot.data.name === name) return searchRoot;
+            if (searchRoot.children) {
+                for (const child of searchRoot.children) {
+                    const found = findNodeByName(child, name);
+                    if (found) return found;
+                }
+            }
+            return null;
+        }
+
+        function rebuildLineageIndexes() {
+            lineageNodeByVdiskId = new Map();
+            lineageParentByChild = new Map();
+            lineageChildrenByParent = new Map();
+            if (!fullRootNode) return;
+
+            const addChildEdge = (parentId, childId) => {
+                if (!parentId || !childId || parentId === childId) return;
+                lineageParentByChild.set(String(childId), String(parentId));
+                if (!lineageChildrenByParent.has(String(parentId))) {
+                    lineageChildrenByParent.set(String(parentId), new Set());
+                }
+                lineageChildrenByParent.get(String(parentId)).add(String(childId));
+            };
+
+            fullRootNode.each(n => {
+                const info = n.data || {};
+                const vid = info.vdisk_id !== undefined && info.vdisk_id !== null ? String(info.vdisk_id) : null;
+                if (vid && !lineageNodeByVdiskId.has(vid)) {
+                    lineageNodeByVdiskId.set(vid, info);
+                }
+
+                const summary = info.lineage_summary || {};
+                const parentId = summary.parent_vdisk_id !== undefined && summary.parent_vdisk_id !== null
+                    ? String(summary.parent_vdisk_id)
+                    : (info.parent_vdisk_id !== undefined && info.parent_vdisk_id !== null ? String(info.parent_vdisk_id) : null);
+                if (vid && parentId && parentId !== "n/a") {
+                    addChildEdge(parentId, vid);
+                }
+
+                if (vid && Array.isArray(summary.children_vdisk_ids)) {
+                    summary.children_vdisk_ids.forEach(cid => addChildEdge(vid, String(cid)));
+                }
+            });
+        }
+
+        function collectLineageVDiskIds(seedVdiskId) {
+            const seed = (seedVdiskId !== undefined && seedVdiskId !== null) ? String(seedVdiskId) : "";
+            const result = new Set();
+            if (!seed) return result;
+
+            // Ancestors (including seed)
+            const upSeen = new Set();
+            let cur = seed;
+            while (cur && !upSeen.has(cur)) {
+                upSeen.add(cur);
+                result.add(cur);
+                cur = lineageParentByChild.get(cur) || null;
+            }
+
+            // Descendants (including seed)
+            const downSeen = new Set([seed]);
+            const queue = [seed];
+            while (queue.length > 0) {
+                const now = queue.shift();
+                result.add(now);
+                const kids = lineageChildrenByParent.get(now);
+                if (!kids) continue;
+                kids.forEach(cid => {
+                    if (!downSeen.has(cid)) {
+                        downSeen.add(cid);
+                        queue.push(cid);
+                    }
+                });
+            }
+
+            return result;
+        }
+
+        function applyActiveLineageFromNodeData(info) {
+            activeMemberChainIds.clear();
+            if (info && info.chain_id) activeChainId = String(info.chain_id);
+            else activeChainId = null;
+
+            activeChainVDiskIds.clear();
+            if (info && info.vdisk_id !== undefined && info.vdisk_id !== null) {
+                collectLineageVDiskIds(info.vdisk_id).forEach(id => activeChainVDiskIds.add(String(id)));
+            } else if (info && info.chain_info && Array.isArray(info.chain_info)) {
+                info.chain_info.forEach(tree => {
+                    if (tree.chain_ids) tree.chain_ids.forEach(cid => activeChainVDiskIds.add(String(cid)));
+                });
+            }
+        }
+
+        function selectChainVDisk(targetVDiskId) {
+            if (!fullRootNode) return;
+
+            let targetNode = null;
+            fullRootNode.each(n => {
+                if (n.data.vdisk_id && String(n.data.vdisk_id) === String(targetVDiskId)) {
+                    targetNode = n;
+                }
+            });
+
+            if (targetNode) {
+                applyActiveLineageFromNodeData(targetNode.data);
+
+                const parentZoomTarget = targetNode.parent || fullRootNode;
+                zoomToNode(parentZoomTarget, null, true, false);
+                inspectNode(targetNode);
+                syncTreeHighlight(targetNode);
+            }
+        }
+
+        function valOrNa(val) {
+            return (val !== undefined && val !== null && val !== "") ? val : "n/a";
+        }
+
+        function findNodeByVdiskId(searchRoot, targetVDiskId) {
+            if (!searchRoot || targetVDiskId === undefined || targetVDiskId === null) return null;
+            let found = null;
+            searchRoot.each(n => {
+                if (found) return;
+                if (n.data && n.data.vdisk_id && String(n.data.vdisk_id) === String(targetVDiskId)) {
+                    found = n;
+                }
+            });
+            return found;
+        }
+
+        function selectLineageVDisk(targetVDiskId) {
+            if (!fullRootNode) return;
+            const targetNode = findNodeByVdiskId(fullRootNode, targetVDiskId);
+            if (!targetNode) return;
+
+            applyActiveLineageFromNodeData(targetNode.data);
+
+            const parentZoomTarget = targetNode.parent || fullRootNode;
+            zoomToNode(parentZoomTarget, null, true, false);
+            inspectNode(targetNode);
+            syncTreeHighlight(targetNode);
+        }
+
+        // --- NEW Helper Function for Multi-Branch Topology Rendering ---
+        function renderTopologyHTML(topoNode) {
+            let html = '';
+            const isLeaf = topoNode.is_leaf ? "<span class='text-rose-400 font-semibold ml-1'>(Leaf - Ignored)</span>" : "";
+            const vdiskText = topoNode.vdisk_ids && topoNode.vdisk_ids.length > 0 ? `[${topoNode.vdisk_ids.join(', ')}]` : "None";
+            const label = `⚙️ ${topoNode.name} <span class="text-[9px] text-slate-400 ml-1">VDisks: ${vdiskText}${isLeaf}</span>`;
+            
+            if (topoNode.children && topoNode.children.length > 0) {
+                html += `<details open class="ml-2 mt-1 border-l border-slate-700/60 pl-2"><summary class="cursor-pointer text-[10px] text-sky-400 hover:text-sky-300 font-mono transition-colors">${label}</summary>`;
+                topoNode.children.forEach(child => {
+                    html += renderTopologyHTML(child);
+                });
+                html += `</details>`;
+            } else {
+                html += `<div class="ml-2 mt-1 border-l border-slate-700/60 pl-2 text-[10px] font-mono text-slate-500">${label}</div>`;
+            }
+            return html;
+        }
+
+        function inspectNode(d) {
+            if (!d) return;
+            const inspector = document.getElementById("inspector");
+            const info = d.data;
+            const realSum = getRealNodeSum(d);
+            const logicalSum = getLogicalNodeSum(d);
+            const vdiskSizeSum = getVdiskSizeSum(d);
+
+            if (info.is_shared_clone_block) {
+                activeMemberChainIds.clear();
+                activeChainId = String(info.chain_id);
+                if (info.member_chain_ids) activeMemberChainIds = new Set(info.member_chain_ids.map(String));
+                if (info.vdisk_ids) activeChainVDiskIds = new Set(info.vdisk_ids.map(String));
+                else activeChainVDiskIds.clear();
+            } else if (info.vdisk_id || info.chain_id || (info.chain_info && Array.isArray(info.chain_info))) {
+                applyActiveLineageFromNodeData(info);
+            }
+
+            if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+            
+            let nodeTypeLabel = info.is_free ? 'Free Storage Space' :
+                info.is_to_remove ? 'Pending Deletion VDisk' :
+                info.is_shared_clone_block ? 'Shared Clone / Snapshot Block' :
+                info.is_shared_parent_vdisk ? 'Parent Shared Node' :
+                info.children ? 'Container / Entity Group' : 'VDisk Leaf';
+            if (info.is_dummy_lineage_root) {
+                nodeTypeLabel += ' [Synthetic Lineage Root (no parent chain)]';
+            }
+            if (info.lineage_summary && info.lineage_summary.lineage_role) {
+                nodeTypeLabel += ` (${info.lineage_summary.lineage_role})`;
+            }
+
+            let fieldsHtml = `
+                <div class="font-bold text-sky-400 text-sm border-b border-slate-700 pb-1 mb-2 break-all">${getDisplayNodeName(info)}</div>
+                <div><span class="text-slate-400">Node Type:</span> ${nodeTypeLabel}</div>
+            `;
+
+            if (info.children) {
+                const totalVdisksLeafFallback = d.leaves().filter(leaf => leaf.data.vdisk_id).length;
+                const totalVdisks = Number.isFinite(Number(info.container_vdisk_count))
+                    ? Number(info.container_vdisk_count)
+                    : totalVdisksLeafFallback;
+                const totalChainIds = d.leaves().filter(leaf => leaf.data.is_shared_clone_block).reduce((acc, leaf) => acc + (leaf.data.member_chain_ids ? leaf.data.member_chain_ids.length : 0), 0);
+
+                if (info.name === "Shared Clones") {
+                    fieldsHtml += `<div><span class="text-slate-400">Total Chain IDs:</span> <span class="font-mono text-slate-200 font-bold">${totalChainIds}</span></div>`;
+                } else {
+                    if (totalVdisks > 0) fieldsHtml += `<div><span class="text-slate-400">Total VDisks:</span> <span class="font-mono text-slate-200 font-bold">${totalVdisks}</span></div>`;
+                    if (totalChainIds > 0) fieldsHtml += `<div><span class="text-slate-400">Total Shared Chain IDs:</span> <span class="font-mono text-slate-200 font-bold">${totalChainIds}</span></div>`;
+                    if (info.container_id !== undefined && info.container_id !== null && String(info.container_id).trim() !== "") {
+                        fieldsHtml += `<div><span class="text-slate-400">Container ID:</span> <span class="font-mono text-slate-200">${valOrNa(info.container_id)}</span></div>`;
+                    }
+                    if (info.container_used_space_physical || info.container_used_space_physical_bytes !== undefined) {
+                        fieldsHtml += `<div><span class="text-slate-400">Used Space:</span> <span class="font-mono text-amber-300 font-bold">${info.container_used_space_physical || formatBytes(info.container_used_space_physical_bytes || 0)}</span></div>`;
+                    }
+                    if (info.container_max_capacity_physical || info.container_max_capacity_physical_bytes !== undefined) {
+                        fieldsHtml += `<div><span class="text-slate-400">Max Capacity:</span> <span class="font-mono text-emerald-300 font-bold">${info.container_max_capacity_physical || formatBytes(info.container_max_capacity_physical_bytes || 0)}</span></div>`;
+                    }
+                }
+            }
+
+            if (info.is_shared_clone_block) {
+                const totalChainIds = info.member_chain_ids ? info.member_chain_ids.length : 0;
+                fieldsHtml += `<div><span class="text-slate-400">Total Chain IDs:</span> <span class="font-mono text-slate-200 font-bold">${totalChainIds}</span></div>
+                    <div class="mt-2 p-2.5 bg-slate-950/70 border border-sky-500/40 rounded-lg space-y-1.5 font-sans">
+                        <div class="text-xs font-bold text-sky-400 border-b border-slate-800 pb-1">🔗 Lineage Family Physical Footprint</div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Total Phys Overhead:</span> <span class="font-mono text-amber-300 font-bold text-xs">${info.formatted_size}</span></div>
+                        
+                        <div class="mt-1 pt-1 border-t border-slate-800 space-y-1 text-[11px]">
+                            <div class="flex justify-between items-center"><span class="text-slate-400">Total Phys PEG:</span> <span class="font-mono text-emerald-400 font-bold">${info.formatted_total_peg || info.formatted_max_peg || "0 KiB"}</span></div>
+                            <div class="flex justify-between items-center"><span class="text-slate-400">Max Log Clone:</span> <span class="font-mono text-sky-400 font-bold">${info.formatted_logical_clone}</span></div>
+                            <div class="flex justify-between items-center"><span class="text-slate-400">Est Phys Clone (2x):</span> <span class="font-mono text-emerald-400 font-bold">${info.formatted_physical_clone || formatBytes(info.logical_clone_bytes ? info.logical_clone_bytes * 2 : 0)}</span></div>
+                            ${info.shared_formula_source ? `<div class="flex justify-between items-center"><span class="text-slate-400">Shared Formula:</span> <span class="font-mono text-cyan-300">${valOrNa(info.shared_formula_source)}</span></div>` : ""}
+                            ${info.shared_formula_terms ? `<div class="text-[10px] text-slate-400">Terms: live=${formatBytes(info.shared_formula_terms.logical_live || 0)}, clone=${formatBytes(info.shared_formula_terms.logical_shared_clone || 0)}, peg=${formatBytes(info.shared_formula_terms.physical_peg || 0)}, exclusive_sum=${formatBytes(info.shared_formula_terms.exclusive_sum || 0)}</div>` : ""}
+                        </div>
+
+                        <!-- NEW: Multi-Branch Topology Visualizer -->
+                        ${info.chain_topology ? `
+                        <div class="mt-2 pt-2 border-t border-slate-800">
+                            <div class="text-[10px] text-sky-300 font-bold mb-1">🌳 Topology Map</div>
+                            <div class="bg-slate-900 rounded p-1.5 border border-slate-700/50 overflow-x-auto custom-scrollbar">
+                                ${renderTopologyHTML(info.chain_topology)}
+                            </div>
+                        </div>` : ''}
+
+                        <div class="mt-2 pt-2 border-t border-slate-800 space-y-1">
+                            <div class="text-[10px] text-slate-400 font-medium">VDisks sharing this Chain Family:</div>
+                            <div class="space-y-1 max-h-36 overflow-y-auto pr-1">
+                `;
+
+                if (info.vdisk_ids && info.vdisk_ids.length > 0) {
+                    info.vdisk_ids.forEach((vdId, idx) => {
+                        fieldsHtml += `
+                            <button onclick="selectChainVDisk('${vdId}')" 
+                                    class="w-full text-left px-2 py-1 rounded border flex items-center justify-between font-mono text-[10px] bg-slate-800 hover:bg-sky-600 text-slate-200 border-slate-700 transition">
+                                <span>${idx + 1}. VDisk-${vdId}</span>
+                                <span class="text-[9px] text-sky-300">Click to view</span>
+                            </button>
+                        `;
+                    });
+                } else {
+                    fieldsHtml += `<div class="text-slate-500 text-[10px] italic">No associated VDisks found</div>`;
+                }
+                fieldsHtml += `</div></div></div>`;
+
+            } else if (info.vdisk_id || info.vdisk_uuid || info.vdisk_name || !info.children) {
+                // === BASIC GROUP ===
+                fieldsHtml += `
+                    <div><span class="text-slate-400">VDisk ID:</span> <span class="font-mono text-slate-200">${valOrNa(info.vdisk_id)}</span></div>
+                    <div><span class="text-slate-400">VDisk Name:</span> <span class="font-mono text-slate-200 break-all">${valOrNa(info.vdisk_name)}</span></div>
+                    <div><span class="text-slate-400">Provisioned Size:</span> <span class="font-mono text-emerald-400 font-bold">${info.vdisk_size !== undefined ? formatBytes(info.vdisk_size) : "n/a"}</span></div>
+                    <div><span class="text-slate-400">Physical Usage:</span> <span class="font-mono text-emerald-300 font-bold">${info.real_bytes !== undefined ? formatBytes(info.real_bytes) : valOrNa(info.formatted_size)}</span></div>
+                    <div><span class="text-slate-400">Shared Storage:</span> <span class="font-mono text-amber-300">${info.formatted_inherited_usage || (info.inherited_usage_bytes !== undefined ? formatBytes(info.inherited_usage_bytes) : "n/a")}</span></div>
+                    <div><span class="text-slate-400">Container ID:</span> <span class="font-mono text-slate-200">${valOrNa(info.container_id)}</span></div>
+                    <div><span class="text-slate-400">VDisk Type:</span> <span class="font-mono text-slate-200">${valOrNa(info.vdisk_type)}</span></div>
+                    <div><span class="text-slate-400">Mutability:</span> <span class="font-mono text-slate-200">${valOrNa(info.mutability_state)}</span></div>
+                    <div><span class="text-slate-400">Classification:</span> <span class="font-mono text-slate-200">${valOrNa(info.classification_reason)}</span></div>
+                    <div><span class="text-slate-400">Mapped VM:</span> <span class="font-mono text-slate-200">${valOrNa(info.mapped_vm_name)}</span></div>
+                    <div><span class="text-slate-400">Mapped VG:</span> <span class="font-mono text-slate-200">${valOrNa(info.mapped_vg_name)}</span></div>
+                    <div><span class="text-slate-400">VG Resolution:</span> <span class="font-mono text-slate-200">${valOrNa(info.vg_resolution_method)}</span></div>
+                    <div><span class="text-slate-400">To Remove:</span> <span class="font-mono ${(info.is_to_remove ?? info.to_remove) ? 'text-rose-400 font-bold' : 'text-slate-200'}">${valOrNa(info.is_to_remove ?? info.to_remove)}</span></div>
+                    <div><span class="text-slate-400">Has Complete Data:</span> <span class="font-mono text-slate-200">${valOrNa(info.has_complete_data)}</span></div>
+                    <div><span class="text-slate-400">NFS File Name:</span> <span class="font-mono text-slate-200 break-all">${valOrNa(info.nfs_file_name)}</span></div>
+                    <div><span class="text-slate-400">Parent VDisk ID:</span> <span class="font-mono text-slate-200">${valOrNa(info.parent_vdisk_id)}</span></div>
+                    <div><span class="text-slate-400">Chain ID:</span> <span class="font-mono text-slate-300 text-[10px] break-all">${valOrNa(info.chain_id)}</span></div>
+                    <div><span class="text-slate-400">Creation Time:</span> <span class="font-mono text-slate-200">${formatUsecsToLocalTime(info.creation_time_usecs || info.vdisk_creation_time_usecs)}</span></div>
+                `;
+                if (info.physical_curator_bytes !== undefined || info.shared_storage_curator_estimated_bytes !== undefined) {
+                    const curatorVal = info.formatted_curator_physical || info.formatted_shared_storage_curator_estimated || "n/a";
+                    const sourceLabel = info.display_source || "n/a";
+                    const formulaSource = info.shared_formula_source || "n/a";
+                    const formulaTerms = info.shared_formula_terms || null;
+                    fieldsHtml += `
+                        <div class="mt-2 p-2 bg-slate-950/70 border border-cyan-500/30 rounded-lg space-y-1 text-[11px]">
+                            <div class="font-bold text-cyan-300 border-b border-slate-800 pb-0.5 mb-1">Source Comparison</div>
+                            <div><span class="text-slate-400">Primary Source:</span> <span class="font-mono text-slate-200">${sourceLabel}</span></div>
+                            <div><span class="text-slate-400">Curator:</span> <span class="font-mono text-emerald-300">${curatorVal}</span></div>
+                            ${(info.shared_storage_curator_estimated_bytes !== undefined || info.curator_shared_estimated_bytes !== undefined) ? `<div><span class="text-slate-400">Shared Formula:</span> <span class="font-mono text-cyan-300">${formulaSource}</span></div>` : ""}
+                            ${formulaTerms ? `<div class="text-[10px] text-slate-400">Terms: live=${formatBytes(formulaTerms.logical_live || 0)}, clone=${formatBytes(formulaTerms.logical_shared_clone || 0)}, peg=${formatBytes(formulaTerms.physical_peg || 0)}, exclusive_sum=${formatBytes(formulaTerms.exclusive_sum || 0)}</div>` : ""}
+                            ${info.is_lineage_root_accounted ? `<div class="text-[10px] text-emerald-300">Root-only accounting: shared space is counted once at lineage root.</div>` : ""}
+                            ${info.immediate_parent_ids && info.immediate_parent_ids.length > 0 ? `<div class="text-[10px] text-slate-400">Referenced parent nodes: ${info.immediate_parent_ids.join(", ")}</div>` : ""}
+                        </div>
+                    `;
+                }
+
+                if (info.lineage_summary) {
+                    const ls = info.lineage_summary;
+                    fieldsHtml += `
+                        <div class="mt-3 p-2 bg-slate-950/70 border border-emerald-500/30 rounded-lg space-y-1 text-[11px]">
+                            <div class="font-bold text-emerald-300 border-b border-slate-800 pb-0.5 mb-1">Lineage Panel</div>
+                            <div><span class="text-slate-400">Role:</span> <span class="font-mono text-slate-200">${valOrNa(ls.lineage_role)}</span></div>
+                            <div><span class="text-slate-400">Lineage Root:</span>
+                                ${ls.lineage_root_vdisk_id ? `<button onclick="selectLineageVDisk('${ls.lineage_root_vdisk_id}')" class="ml-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 hover:bg-sky-900 text-sky-300 font-mono">${ls.lineage_root_vdisk_id}</button>` : '<span class="font-mono text-slate-500">n/a</span>'}
+                            </div>
+                            <div><span class="text-slate-400">Depth from Root:</span> <span class="font-mono text-slate-200">${valOrNa(ls.depth_from_root)}</span></div>
+                            <div><span class="text-slate-400">Parent:</span>
+                                ${ls.parent_vdisk_id ? `<button onclick="selectLineageVDisk('${ls.parent_vdisk_id}')" class="ml-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 hover:bg-sky-900 text-sky-300 font-mono">${ls.parent_vdisk_id}</button>` : '<span class="font-mono text-slate-500">n/a</span>'}
+                            </div>
+                            <div><span class="text-slate-400">Node Shared Storage:</span> <span class="font-mono text-amber-300">${valOrNa(ls.formatted_node_shared_storage)}</span></div>
+                            <div><span class="text-slate-400">Subtree Shared Storage:</span> <span class="font-mono text-amber-300">${valOrNa(ls.formatted_subtree_shared_storage)}</span></div>
+                            ${ls.orphan_parent_record ? `<div class="text-rose-300">Parent record missing in vdisk_config_printer.</div>` : ''}
+                            <div class="pt-1 border-t border-slate-800">
+                                <div class="text-slate-400 mb-1">Children:</div>
+                                ${ls.child_details && ls.child_details.length > 0 ? ls.child_details.map((child, idx) => `
+                                    <button onclick="selectLineageVDisk('${child.vdisk_id}')" class="w-full text-left mb-1 px-2 py-1 rounded border border-slate-700 bg-slate-900 hover:bg-sky-900 text-slate-200 font-mono text-[10px] flex items-center justify-between">
+                                        <span>${idx + 1}. ${child.vdisk_id}</span>
+                                        <span class="text-amber-300">${child.formatted_inherited_usage}</span>
+                                    </button>
+                                `).join("") : `<div class="text-slate-500 italic">No children</div>`}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                // === ADVANCED PROPERTIES DROPDOWN ===
+                fieldsHtml += `
+                <details class="mt-3 group border border-slate-700 rounded-lg" ${isAdvancedPropertiesOpen ? 'open' : ''} ontoggle="isAdvancedPropertiesOpen = this.open">
+                    <summary class="px-3 py-2 text-xs font-semibold text-sky-400 cursor-pointer bg-slate-800/50 hover:bg-slate-700/50 transition flex items-center">
+                        <svg class="w-3 h-3 mr-2 transform transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        Advanced Properties
+                    </summary>
+                    <div class="p-3 space-y-1 bg-slate-950/50 text-[10px]">
+                        <div><span class="text-slate-500">VDisk UUID:</span> <span class="font-mono text-slate-300 break-all">${valOrNa(info.vdisk_uuid)}</span></div>
+                        <div><span class="text-slate-500">Parent Chain ID:</span> <span class="font-mono text-slate-300 break-all">${valOrNa(info.parent_chain_id)}</span></div>
+                        <div><span class="text-slate-500">Snapshot Chain ID:</span> <span class="font-mono text-slate-300">${valOrNa(info.snapshot_chain_id)}</span></div>
+                        <div><span class="text-slate-500">Lineage ID:</span> <span class="font-mono text-slate-300 break-all">${valOrNa(info.lineage_id)}</span></div>
+                        <div><span class="text-slate-500">Originating VDisk ID:</span> <span class="font-mono text-slate-300">${valOrNa(info.originating_vdisk_id)}</span></div>
+                        <div><span class="text-slate-500">Clone Source VDisk ID:</span> <span class="font-mono text-slate-300">${valOrNa(info.clone_source_vdisk_id)}</span></div>
+                        <div><span class="text-slate-500">Closest Named Ancestor:</span> <span class="font-mono text-slate-300 break-all">${valOrNa(info.closest_named_ancestor)}</span></div>
+                        <div><span class="text-slate-500">May Be Parent:</span> <span class="font-mono text-slate-300">${valOrNa(info.may_be_parent)}</span></div>
+                        <div><span class="text-slate-500">Has Incomplete Ancestor:</span> <span class="font-mono text-slate-300">${valOrNa(info.has_incomplete_ancestor)}</span></div>
+                        <div><span class="text-slate-500">Originating Cluster ID:</span> <span class="font-mono text-slate-300">${valOrNa(info.originating_cluster_id)}</span></div>
+                        <div><span class="text-slate-500">Originating Cluster Incarnation:</span> <span class="font-mono text-slate-300">${valOrNa(info.originating_cluster_incarnation_id)}</span></div>
+                        <div><span class="text-slate-500">Parent NFS Hint:</span> <span class="font-mono text-slate-300 break-all">${valOrNa(info.parent_nfs_file_name_hint)}</span></div>
+                        
+                        <div class="border-t border-slate-700/50 mt-1.5 pt-1.5">
+                            <div><span class="text-slate-500">Shell VDisk:</span> <span class="font-mono text-slate-300">${valOrNa(info.shell_vdisk)}</span></div>
+                            <div><span class="text-slate-500">Never Hosted:</span> <span class="font-mono text-slate-300">${valOrNa(info.never_hosted)}</span></div>
+                            <div><span class="text-slate-500">Is Metadata VDisk:</span> <span class="font-mono text-slate-300">${valOrNa(info.is_metadata_vdisk)}</span></div>
+                            <div><span class="text-slate-500">Root of Removable Subtree:</span> <span class="font-mono text-slate-300">${valOrNa(info.root_of_removable_subtree)}</span></div>
+                            <div><span class="text-slate-500">Always Write Emap Extents:</span> <span class="font-mono text-slate-300">${valOrNa(info.always_write_emap_extents)}</span></div>
+                            <div><span class="text-slate-500">Avoid VBlock Copy:</span> <span class="font-mono text-slate-300">${valOrNa(info.avoid_vblock_copy_when_leaf)}</span></div>
+                            <div><span class="text-slate-500">iSCSI Multipath:</span> <span class="font-mono text-slate-300">${valOrNa(info.iscsi_multipath_protocol)}</span></div>
+                        </div>
+
+                        <div class="border-t border-slate-700/50 mt-1.5 pt-1.5">
+                            <div><span class="text-slate-500">VDisk Creation Time:</span> <span class="font-mono text-slate-300">${formatUsecsToLocalTime(info.vdisk_creation_time_usecs)}</span></div>
+                            <div><span class="text-slate-500">Last Modification:</span> <span class="font-mono text-slate-300">${formatUsecsToLocalTime(info.last_modification_time_usecs)}</span></div>
+                            <div><span class="text-slate-500">VDisk Snapshot Time:</span> <span class="font-mono text-slate-300">${formatUsecsToLocalTime(info.vdisk_snapshot_time_usecs)}</span></div>
+                            <div><span class="text-slate-500">Orig. VDisk Snapshot Time:</span> <span class="font-mono text-slate-300">${formatUsecsToLocalTime(info.originating_vdisk_snapshot_time_usecs)}</span></div>
+                            <div><span class="text-slate-500">TTL Hint:</span> <span class="font-mono text-slate-300">${formatUsecsToLocalTime(info.time_to_live_usecs_hint)}</span></div>
+                        </div>
+
+                        <div class="border-t border-slate-700/50 mt-1.5 pt-1.5">
+                            <div><span class="text-slate-500">Snapshot Draining:</span> <span class="font-mono text-slate-300">${valOrNa(info.snapshot_draining)}</span></div>
+                            <div><span class="text-slate-500">Parent Draining:</span> <span class="font-mono text-slate-300">${valOrNa(info.parent_draining)}</span></div>
+                            <div><span class="text-slate-500">Clone Parent Draining:</span> <span class="font-mono text-slate-300">${valOrNa(info.clone_parent_draining)}</span></div>
+                            <div><span class="text-slate-500">Oplog Type:</span> <span class="font-mono text-slate-300">${valOrNa(info.oplog_type)}</span></div>
+                            <div><span class="text-slate-500">Data Log ID:</span> <span class="font-mono text-slate-300">${valOrNa(info.data_log_id)}</span></div>
+                            <div><span class="text-slate-500">Flush Log ID:</span> <span class="font-mono text-slate-300">${valOrNa(info.flush_log_id)}</span></div>
+                            <div><span class="text-slate-500">Pithos Version:</span> <span class="font-mono text-slate-300">${valOrNa(info.last_updated_pithos_version)}</span></div>
+                            <div><span class="text-slate-500">VDisk Snapshot UUID:</span> <span class="font-mono text-slate-300 break-all">${valOrNa(info.vdisk_snapshot_uuid)}</span></div>
+                        </div>
+                        
+                        <div class="border-t border-slate-700/50 mt-1.5 pt-1.5">
+                            <div class="font-bold text-slate-400 mb-0.5">Parameters:</div>
+                            <div><span class="text-slate-500">Placement Policy ID:</span> <span class="font-mono text-slate-300">${info.params ? valOrNa(info.params.replica_placement_policy_id) : "n/a"}</span></div>
+                            <div><span class="text-slate-500">Placement Policy UUID:</span> <span class="font-mono text-slate-300 break-all">${info.params ? valOrNa(info.params.replica_placement_policy_uuid) : "n/a"}</span></div>
+                            <div><span class="text-slate-500">Num Shards:</span> <span class="font-mono text-slate-300">${info.params ? valOrNa(info.params.num_shards) : "n/a"}</span></div>
+                            <div><span class="text-slate-500">Reserved Capacity:</span> <span class="font-mono text-slate-300">${info.params ? valOrNa(info.params.total_reserved_capacity) : "n/a"}</span></div>
+                            <div><span class="text-slate-500">Replication Mode:</span> <span class="font-mono text-slate-300">${info.vdisk_creation_context ? valOrNa(info.vdisk_creation_context.replication_mode) : "n/a"}</span></div>
+                        </div>
+                    </div>
+                </details>
+                `;
+
+                // === CURATOR CHAIN USAGE ===
+                if (info.chain_stats && Object.keys(info.chain_stats).length > 0) {
+                    fieldsHtml += `
+                        <div class="mt-3 p-2 bg-slate-950/70 border border-sky-500/30 rounded-lg space-y-1 text-[11px]">
+                            <div class="font-bold text-sky-400 border-b border-slate-800 pb-0.5 mb-1">🔗 Curator Chain Usage</div>
+                            <div class="flex justify-between"><span class="text-slate-400">Logical Exclusive:</span> <span class="font-mono text-sky-300 font-bold">${formatBytes(info.chain_stats.logical_exclusive || 0)}</span></div>
+                            <div class="flex justify-between"><span class="text-slate-400">Logical Live:</span> <span class="font-mono text-sky-300 font-bold">${formatBytes(info.chain_stats.logical_live || 0)}</span></div>
+                            <div class="flex justify-between"><span class="text-slate-400">Logical Shared Clone:</span> <span class="font-mono text-emerald-300 font-bold">${formatBytes(info.chain_stats.logical_shared_clone || 0)}</span></div>
+                            <div class="flex justify-between"><span class="text-slate-400">Logical Exclusive Snap:</span> <span class="font-mono text-purple-300 font-bold">${formatBytes(info.chain_stats.logical_exclusive_snapshot || 0)}</span></div>
+                            <div class="flex justify-between border-t border-slate-800 pt-0.5 mt-0.5"><span class="text-slate-400">Physical PEG:</span> <span class="font-mono text-amber-300 font-bold">${formatBytes(info.chain_stats.physical_peg || 0)}</span></div>
+                        </div>
+                    `;
+                }
+
+                // === MULTI-BRANCH SNAPSHOT TREES ===
+                if (info.chain_info && Array.isArray(info.chain_info) && info.chain_info.length > 0) {
+                    if (info.chain_info.length > 1) {
+                        fieldsHtml += `
+                            <div class="mt-4 mb-2 flex items-center space-x-2">
+                                <span class="text-[11px] font-bold text-sky-400 border-b border-sky-500/50 pb-0.5">
+                                    🔀 Multi-Branch Lineage
+                                </span>
+                                <span class="bg-sky-500/20 text-sky-300 text-[9px] px-1.5 py-0.5 rounded border border-sky-500/30">
+                                    Exists in ${info.chain_info.length} Trees
+                                </span>
+                            </div>
+                        `;
+                    }
+
+                    fieldsHtml += `<div class="space-y-3 mt-3">`;
+
+                    info.chain_info.forEach((chain, tIdx) => {
+                        fieldsHtml += `
+                        <div class="bg-slate-900 border ${info.chain_info.length > 1 ? 'border-sky-500/40' : 'border-amber-500/40'} rounded-lg overflow-hidden shadow-sm">
+                            <div class="bg-slate-800/80 px-2 py-1.5 border-b border-slate-700 flex justify-between items-center">
+                                <span class="font-bold ${info.chain_info.length > 1 ? 'text-sky-400' : 'text-amber-400'} text-[10px]">
+                                    🔗 Snapshot Tree #${chain.chain_index}
+                                </span>
+                                <span class="text-[9px] bg-slate-950 px-1.5 py-0.5 rounded text-slate-300 border border-slate-700">Pos ${chain.position} of ${chain.chain_length}</span>
+                            </div>
+                            
+                            <div class="p-2 space-y-1.5 text-[10px]">
+                                <div class="grid grid-cols-2 gap-1 pb-1.5 border-b border-slate-700/50">
+                                    <div><span class="text-slate-500">Delta (dt):</span> <span class="text-slate-300">${chain.dt}</span></div>
+                                    <div><span class="text-slate-500">Flags:</span> <span class="text-slate-300">${chain.flags}</span></div>
+                                </div>
+
+                                <div class="text-slate-400 font-medium pt-0.5">Tree Members (Oldest to Newest):</div>
+                                <div class="space-y-1 max-h-32 overflow-y-auto pr-1 custom-scrollbar">
+                        `;
+
+                        chain.chain_ids.forEach((cId, idx) => {
+                            const isCurrent = String(cId) === String(info.vdisk_id);
+                            
+                            let nodeSizeStr = "Size Unknown";
+                            if (fullRootNode) {
+                                fullRootNode.each(n => {
+                                    if (n.data.vdisk_id && String(n.data.vdisk_id) === String(cId)) {
+                                        const sz = getRealNodeSum(n);
+                                        if (sz > 0) nodeSizeStr = formatBytes(sz);
+                                    }
+                                });
+                            }
+
+                            fieldsHtml += `
+                                <button onclick="selectChainVDisk('${cId}')" 
+                                        class="w-full text-left px-2 py-1.5 rounded flex items-center justify-between font-mono text-[9px] transition
+                                        ${isCurrent 
+                                            ? 'bg-slate-700 text-white font-bold cursor-default shadow-inner' 
+                                            : 'bg-slate-950 hover:bg-sky-900 border border-slate-800 text-slate-300'}">
+                                    <span class="truncate pr-2">${idx + 1}. VDisk-${cId} ${isCurrent ? '👈' : ''}</span>
+                                    <span class="opacity-80 whitespace-nowrap">${nodeSizeStr}</span>
+                                </button>
+                            `;
+                        });
+
+                        fieldsHtml += `
+                                </div>
+                            </div>
+                        </div>`;
+                    });
+
+                    fieldsHtml += `</div>`;
+                }
+            }
+
+            if (!info.is_shared_clone_block) {
+                fieldsHtml += `
+                    <div class="mt-3 pt-3 border-t border-slate-700 space-y-1">
+                        <div class="flex justify-between items-center">
+                            <span class="text-slate-400">Exclusive Usage:</span> 
+                            <span class="font-mono text-xs ${info.is_free ? 'text-green-400 font-bold' : info.is_to_remove ? 'text-rose-400 font-bold' : 'text-amber-300 font-bold'}">${formatBytes(realSum)}</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-slate-400">Logical Exclusive:</span> 
+                            <span class="font-mono text-xs text-sky-400 font-bold">${info.logical_bytes !== undefined && info.logical_bytes !== null ? formatBytes(info.logical_bytes) : info.children ? formatBytes(logicalSum) : 'N/A'}</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-slate-400">Total Provisioned:</span> 
+                            <span class="font-mono text-xs text-emerald-400 font-bold">${info.vdisk_size !== undefined ? formatBytes(info.vdisk_size) : formatBytes(vdiskSizeSum)}</span>
+                        </div>
+                    </div>
+                `;
+            }
+
+            inspector.innerHTML = fieldsHtml;
+        }
+    </script>
+</body>
+</html>
