@@ -484,8 +484,18 @@ def process_container_centric_logs(sections: dict):
             vdisk_id = str(vd.get("vdisk_id", ""))
             nfs_name = str(vd.get("nfs_file_name", "")).strip()
             curator_exclusive = int(curator_usage_map.get(vdisk_id, 0))
-            primary_usage_bytes = curator_exclusive
-            primary_source = "curator_cli"
+            params_reserved = int(((vd.get("params") or {}).get("total_reserved_capacity", 0)) or 0)
+            has_hint_total_reserved_capacity = "hint_total_reserved_capacity" in vd
+            # ESXi thick-provision detection:
+            # use only total_reserved_capacity and explicitly exclude vdisks that
+            # expose hint_total_reserved_capacity (these are not classified as thick here).
+            thick_reserved_raw_bytes = params_reserved if (params_reserved > 0 and not has_hint_total_reserved_capacity) else 0
+            is_thick_prov_vdisk = thick_reserved_raw_bytes > 0
+            # Thick-provisioned vdisks render with reserved capacity (x2) instead of
+            # curator exclusive usage so the treemap represents provisioned footprint.
+            thick_prov_vdisk_bytes = thick_reserved_raw_bytes * 2 if is_thick_prov_vdisk else 0
+            primary_usage_bytes = thick_prov_vdisk_bytes if is_thick_prov_vdisk else curator_exclusive
+            primary_source = "thick_prov_total_reserved_capacity_x2" if is_thick_prov_vdisk else "curator_cli"
             c_total += primary_usage_bytes
 
             node = vd.copy()
@@ -501,6 +511,10 @@ def process_container_centric_logs(sections: dict):
                 "physical_curator_bytes": curator_exclusive,
                 "formatted_curator_physical": format_bytes(curator_exclusive),
                 "formatted_size": format_bytes(primary_usage_bytes),
+                "is_thick_prov_vdisk": is_thick_prov_vdisk,
+                "thick_prov_raw_bytes": thick_reserved_raw_bytes,
+                "thick_prov_vdisk_bytes": thick_prov_vdisk_bytes,
+                "formatted_thick_prov_vdisk_size": format_bytes(thick_prov_vdisk_bytes),
                 "inherited_usage_bytes": curator_shared_estimate,
                 "formatted_inherited_usage": format_bytes(curator_shared_estimate),
                 "curator_shared_estimated_bytes": curator_shared_estimate,
@@ -767,44 +781,6 @@ def process_container_centric_logs(sections: dict):
             replication_factor = 1
         explicit_res_bytes = int(c.get("explicit_res_logical_bytes", 0) or 0)
         explicit_res_scaled_bytes = explicit_res_bytes * 2
-        if explicit_res_bytes > 0:
-            container_children.append({
-                "name": "Explicit Reserved (Logical)",
-                "aggregate_exclusive_bytes": explicit_res_scaled_bytes,
-                "formatted_size": format_bytes(explicit_res_scaled_bytes),
-                "children": [{
-                    "name": "Explicit Reserved (Logical)",
-                    "is_explicit_reserve_block": True,
-                    "container_name": c_name,
-                    "value": explicit_res_scaled_bytes,
-                    "real_bytes": explicit_res_scaled_bytes,
-                    "raw_explicit_reserve_bytes": explicit_res_bytes,
-                    "replication_factor": replication_factor,
-                    "scaled_by_2x": True,
-                    "display_source": "ncli_container_logical",
-                    "formatted_size": format_bytes(explicit_res_scaled_bytes),
-                }]
-            })
-        thick_prov_bytes = int(c.get("thick_prov_logical_bytes", 0) or 0)
-        thick_prov_scaled_bytes = thick_prov_bytes * 2
-        if thick_prov_bytes > 0:
-            container_children.append({
-                "name": "Thick Provisioned",
-                "aggregate_exclusive_bytes": thick_prov_scaled_bytes,
-                "formatted_size": format_bytes(thick_prov_scaled_bytes),
-                "children": [{
-                    "name": "Thick Provisioned",
-                    "is_thick_prov_block": True,
-                    "container_name": c_name,
-                    "value": thick_prov_scaled_bytes,
-                    "real_bytes": thick_prov_scaled_bytes,
-                    "raw_thick_prov_bytes": thick_prov_bytes,
-                    "replication_factor": replication_factor,
-                    "scaled_by_2x": True,
-                    "display_source": "ncli_container_logical",
-                    "formatted_size": format_bytes(thick_prov_scaled_bytes),
-                }]
-            })
         if shared_storage_nodes:
             container_children.append({
                 "name": "Shared Storage",
@@ -812,7 +788,34 @@ def process_container_centric_logs(sections: dict):
                 "formatted_size": format_bytes(shared_storage_total),
                 "children": shared_storage_nodes
             })
-        c_total_with_shared = c_total + shared_storage_total + explicit_res_scaled_bytes + thick_prov_scaled_bytes
+
+        # Container reservation residual:
+        # Explicit Reserved(Logical)*2 minus all other consumers in the container.
+        # Thick provisioned vdisks are already included in c_total at vdisk level.
+        other_container_total = c_total + shared_storage_total
+        explicit_residual_bytes = explicit_res_scaled_bytes - other_container_total
+        if explicit_residual_bytes > 0:
+            container_children.append({
+                "name": "Explicit Reserved (Logical)",
+                "aggregate_exclusive_bytes": explicit_residual_bytes,
+                "formatted_size": format_bytes(explicit_residual_bytes),
+                "children": [{
+                    "name": "Explicit Reserved (Logical)",
+                    "is_explicit_reserve_block": True,
+                    "container_name": c_name,
+                    "value": explicit_residual_bytes,
+                    "real_bytes": explicit_residual_bytes,
+                    "raw_explicit_reserve_bytes": explicit_res_bytes,
+                    "scaled_explicit_reserve_bytes": explicit_res_scaled_bytes,
+                    "other_container_total_bytes": other_container_total,
+                    "formula": "explicit_res_logical_x2_minus_container_others",
+                    "scaled_by_2x": True,
+                    "display_source": "ncli_container_logical_residual",
+                    "formatted_size": format_bytes(explicit_residual_bytes),
+                }]
+            })
+
+        c_total_with_shared = other_container_total + max(0, explicit_residual_bytes)
         normalize_curator_primary_sources(container_children)
         container_children.sort(
             key=lambda g: (
@@ -834,9 +837,9 @@ def process_container_centric_logs(sections: dict):
             "explicit_res_logical": c.get("explicit_res_logical"),
             "explicit_res_logical_bytes": c.get("explicit_res_logical_bytes", 0),
             "explicit_res_logical_scaled_bytes": explicit_res_scaled_bytes,
+            "explicit_res_logical_residual_bytes": max(0, explicit_residual_bytes),
             "thick_prov_logical": c.get("thick_prov_logical"),
             "thick_prov_logical_bytes": c.get("thick_prov_logical_bytes", 0),
-            "thick_prov_logical_scaled_bytes": thick_prov_scaled_bytes,
             "replication_factor": replication_factor,
             "children": container_children
         }

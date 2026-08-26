@@ -894,7 +894,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (data.vdisk_id && activeChainVDiskIds.has(String(data.vdisk_id))) return 'activeChain';
             if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return 'sharedClone';
             if (data.is_explicit_reserve_block || data.name === "Explicit Reserved (Logical)") return 'explicitReserve';
-            if (data.is_thick_prov_block || data.name === "Thick Provisioned") return 'thickProv';
+            if (data.is_thick_prov_vdisk || data.is_thick_prov_block || data.name === "Thick Provisioned") return 'thickProv';
             if (data.is_shared_clone_block) {
                 const matchesRoot = activeChainId && String(data.chain_id) === String(activeChainId);
                 const matchesMember = data.member_chain_ids && activeChainId && data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
@@ -926,7 +926,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (data.vdisk_id && activeChainVDiskIds.has(String(data.vdisk_id))) return themeColors.activeChain;
             if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return themeColors.sharedClone;
             if (data.is_explicit_reserve_block || data.name === "Explicit Reserved (Logical)") return themeColors.explicitReserve;
-            if (data.is_thick_prov_block || data.name === "Thick Provisioned") return themeColors.thickProv;
+            if (data.is_thick_prov_vdisk || data.is_thick_prov_block || data.name === "Thick Provisioned") return themeColors.thickProv;
             if (data.is_shared_clone_block) {
                 const matchesRoot = activeChainId && String(data.chain_id) === String(activeChainId);
                 const matchesMember = data.member_chain_ids && activeChainId && data.member_chain_ids.some(cid => String(cid) === String(activeChainId));

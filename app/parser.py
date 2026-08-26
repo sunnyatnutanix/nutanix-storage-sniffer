@@ -33,8 +33,9 @@ def parse_vdisk_configure_printer(log_text: str):
         "vdisk_id", "vdisk_size", "parent_vdisk_id", "container_id", "snapshot_chain_id", 
         "originating_vdisk_id", "originating_cluster_id", "originating_cluster_incarnation_id", 
         "clone_source_vdisk_id", "data_log_id", "flush_log_id", "vdisk_creation_time_usecs", 
-        "creation_time_usecs", "last_modification_time_usecs", "vdisk_snapshot_time_usecs", 
+        "creation_time_usecs", "last_modification_time_usecs", "vdisk_snapshot_time_usecs",
         "originating_vdisk_snapshot_time_usecs", "time_to_live_usecs_hint"
+        , "hint_total_reserved_capacity"
     ]
     bool_keys = [
         "to_remove", "shell_vdisk", "never_hosted", "has_complete_data", "is_metadata_vdisk", 
