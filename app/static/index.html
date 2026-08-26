@@ -147,7 +147,7 @@
                     <input type="color" id="picker-sharedClone" onchange="updateColorFromPicker('sharedClone', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
-                    <span class="text-slate-300 font-medium">Explicit Reserved</span>
+                    <span class="text-slate-300 font-medium">Reserved Available Space</span>
                     <input type="color" id="picker-explicitReserve" onchange="updateColorFromPicker('explicitReserve', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
@@ -842,7 +842,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 { key: "vg", label: "Volume Groups" },
                 { key: "snapshots", label: "Snapshots" },
                 { key: "sharedClone", label: "Shared VDisks" },
-                { key: "explicitReserve", label: "Explicit Reserved" },
+                { key: "explicitReserve", label: "Reserved Available Space" },
                 { key: "thickProv", label: "Thick Provisioned" },
                 { key: "vdisk", label: "Standard VDisks" },
                 { key: "activeChain", label: "Active Chain" },
@@ -864,7 +864,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 vg: "Volume Groups",
                 snapshots: "Snapshots",
                 sharedClone: "Shared VDisks",
-                explicitReserve: "Explicit Reserved",
+                explicitReserve: "Reserved Available Space",
                 thickProv: "Thick Provisioned",
                 vdisk: "Standard VDisks",
                 activeChain: "Active Chain",
@@ -893,7 +893,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const data = d.data;
             if (data.vdisk_id && activeChainVDiskIds.has(String(data.vdisk_id))) return 'activeChain';
             if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return 'sharedClone';
-            if (data.is_explicit_reserve_block || data.name === "Explicit Reserved (Logical)") return 'explicitReserve';
+            if (data.is_explicit_reserve_block || data.name === "Reserved Available Space") return 'explicitReserve';
             if (data.is_thick_prov_vdisk || data.is_thick_prov_block || data.name === "Thick Provisioned") return 'thickProv';
             if (data.is_shared_clone_block) {
                 const matchesRoot = activeChainId && String(data.chain_id) === String(activeChainId);
@@ -925,7 +925,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         function getEntityColor(data) {
             if (data.vdisk_id && activeChainVDiskIds.has(String(data.vdisk_id))) return themeColors.activeChain;
             if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return themeColors.sharedClone;
-            if (data.is_explicit_reserve_block || data.name === "Explicit Reserved (Logical)") return themeColors.explicitReserve;
+            if (data.is_explicit_reserve_block || data.name === "Reserved Available Space") return themeColors.explicitReserve;
             if (data.is_thick_prov_vdisk || data.is_thick_prov_block || data.name === "Thick Provisioned") return themeColors.thickProv;
             if (data.is_shared_clone_block) {
                 const matchesRoot = activeChainId && String(data.chain_id) === String(activeChainId);
@@ -2852,6 +2852,9 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     }
                     if (info.container_max_capacity_physical || info.container_max_capacity_physical_bytes !== undefined) {
                         fieldsHtml += `<div><span class="text-slate-400">Max Capacity:</span> <span class="font-mono text-emerald-300 font-bold">${info.container_max_capacity_physical || formatBytes(info.container_max_capacity_physical_bytes || 0)}</span></div>`;
+                    }
+                    if (info.explicit_res_logical || info.explicit_res_logical_bytes !== undefined) {
+                        fieldsHtml += `<div><span class="text-slate-400">Explicit Reserved (Logical):</span> <span class="font-mono text-cyan-300 font-bold">${info.explicit_res_logical || formatBytes(info.explicit_res_logical_bytes || 0)}</span></div>`;
                     }
                 }
             }

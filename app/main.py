@@ -452,6 +452,12 @@ def process_container_centric_logs(sections: dict):
 
     for c in containers:
         c_name = c.get("name", "UnknownContainer")
+        try:
+            replication_factor = int(str(c.get("replication_factor") or "2").strip())
+            if replication_factor <= 0:
+                replication_factor = 2
+        except Exception:
+            replication_factor = 2
         nfs_names = [n for n in nfs_map.get(c_name, []) if n in valid_nfs_names]
         entity_groups = {}
         shared_root_nodes = {}
@@ -491,11 +497,11 @@ def process_container_centric_logs(sections: dict):
             # expose hint_total_reserved_capacity (these are not classified as thick here).
             thick_reserved_raw_bytes = params_reserved if (params_reserved > 0 and not has_hint_total_reserved_capacity) else 0
             is_thick_prov_vdisk = thick_reserved_raw_bytes > 0
-            # Thick-provisioned vdisks render with reserved capacity (x2) instead of
-            # curator exclusive usage so the treemap represents provisioned footprint.
-            thick_prov_vdisk_bytes = thick_reserved_raw_bytes * 2 if is_thick_prov_vdisk else 0
+            # Thick-provisioned vdisks render with reserved capacity scaled by
+            # container replication factor instead of curator exclusive usage.
+            thick_prov_vdisk_bytes = thick_reserved_raw_bytes * replication_factor if is_thick_prov_vdisk else 0
             primary_usage_bytes = thick_prov_vdisk_bytes if is_thick_prov_vdisk else curator_exclusive
-            primary_source = "thick_prov_total_reserved_capacity_x2" if is_thick_prov_vdisk else "curator_cli"
+            primary_source = "thick_prov_total_reserved_capacity_x_rf" if is_thick_prov_vdisk else "curator_cli"
             c_total += primary_usage_bytes
 
             node = vd.copy()
@@ -514,6 +520,7 @@ def process_container_centric_logs(sections: dict):
                 "is_thick_prov_vdisk": is_thick_prov_vdisk,
                 "thick_prov_raw_bytes": thick_reserved_raw_bytes,
                 "thick_prov_vdisk_bytes": thick_prov_vdisk_bytes,
+                "replication_factor": replication_factor,
                 "formatted_thick_prov_vdisk_size": format_bytes(thick_prov_vdisk_bytes),
                 "inherited_usage_bytes": curator_shared_estimate,
                 "formatted_inherited_usage": format_bytes(curator_shared_estimate),
@@ -773,14 +780,8 @@ def process_container_centric_logs(sections: dict):
                 "formatted_size": format_bytes(group_total),
                 "children": group_nodes
             })
-        try:
-            replication_factor = int(str(c.get("replication_factor") or "1").strip())
-            if replication_factor <= 0:
-                replication_factor = 1
-        except Exception:
-            replication_factor = 1
         explicit_res_bytes = int(c.get("explicit_res_logical_bytes", 0) or 0)
-        explicit_res_scaled_bytes = explicit_res_bytes * 2
+        explicit_res_scaled_bytes = explicit_res_bytes * replication_factor
         if shared_storage_nodes:
             container_children.append({
                 "name": "Shared Storage",
@@ -790,17 +791,17 @@ def process_container_centric_logs(sections: dict):
             })
 
         # Container reservation residual:
-        # Explicit Reserved(Logical)*2 minus all other consumers in the container.
+        # Explicit Reserved(Logical)*ReplicationFactor minus all other consumers in the container.
         # Thick provisioned vdisks are already included in c_total at vdisk level.
         other_container_total = c_total + shared_storage_total
         explicit_residual_bytes = explicit_res_scaled_bytes - other_container_total
         if explicit_residual_bytes > 0:
             container_children.append({
-                "name": "Explicit Reserved (Logical)",
+                "name": "Reserved Available Space",
                 "aggregate_exclusive_bytes": explicit_residual_bytes,
                 "formatted_size": format_bytes(explicit_residual_bytes),
                 "children": [{
-                    "name": "Explicit Reserved (Logical)",
+                    "name": "Reserved Available Space",
                     "is_explicit_reserve_block": True,
                     "container_name": c_name,
                     "value": explicit_residual_bytes,
@@ -808,8 +809,8 @@ def process_container_centric_logs(sections: dict):
                     "raw_explicit_reserve_bytes": explicit_res_bytes,
                     "scaled_explicit_reserve_bytes": explicit_res_scaled_bytes,
                     "other_container_total_bytes": other_container_total,
-                    "formula": "explicit_res_logical_x2_minus_container_others",
-                    "scaled_by_2x": True,
+                    "formula": "reserved_available_space_equals_explicit_res_logical_x_rf_minus_all_container_usage",
+                    "scaled_by_replication_factor": True,
                     "display_source": "ncli_container_logical_residual",
                     "formatted_size": format_bytes(explicit_residual_bytes),
                 }]
