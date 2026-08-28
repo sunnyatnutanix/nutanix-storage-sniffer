@@ -131,6 +131,10 @@
                     <input type="color" id="picker-pendingDeletion" onchange="updateColorFromPicker('pendingDeletion', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Recycle Bin</span>
+                    <input type="color" id="picker-recycleBin" onchange="updateColorFromPicker('recycleBin', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
                     <span class="text-slate-300 font-medium">Virtual Machines (VM)</span>
                     <input type="color" id="picker-vm" onchange="updateColorFromPicker('vm', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
@@ -239,7 +243,7 @@
                        class="bg-slate-900 border border-slate-600 px-3 py-1.5 rounded focus:outline-none focus:border-sky-500 w-28">
                 <button type="submit" id="scan-btn"
                         class="bg-sky-500 hover:bg-sky-600 font-semibold px-4 py-1.5 rounded text-white transition flex items-center space-x-1">
-                    <span>Connect</span>
+                    <span>Analyze</span>
                 </button>
             </form>
 
@@ -252,7 +256,7 @@
                        class="bg-slate-900 border border-slate-600 px-3 py-1 rounded focus:outline-none focus:border-sky-500 text-slate-300 w-64 file:mr-2 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-xs file:bg-slate-700 file:text-slate-200 hover:file:bg-sky-600">
                 <button type="submit" id="upload-btn"
                         class="bg-emerald-500 hover:bg-emerald-600 font-semibold px-4 py-1.5 rounded text-white transition flex items-center space-x-1">
-                    <span>Load File</span>
+                    <span>Analyze</span>
                 </button>
             </form>
         </div>
@@ -708,6 +712,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         const defaultThemeColors = {
             freeSpace: '#2d5a27',
             pendingDeletion: '#881337',
+            recycleBin: '#b45309',
             vm: '#1e3a8a',
             vg: '#581c87',
             container: '#2e1065',
@@ -838,6 +843,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const items = [
                 { key: "", label: "All" },
                 { key: "pendingDeletion", label: "Pending Deletion" },
+                { key: "recycleBin", label: "Recycle Bin" },
                 { key: "vm", label: "VMs" },
                 { key: "vg", label: "Volume Groups" },
                 { key: "snapshots", label: "Snapshots" },
@@ -860,6 +866,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         function updateLegendDropdownStyles() {
             const labelByKey = {
                 pendingDeletion: "Pending Deletion",
+                recycleBin: "Recycle Bin",
                 vm: "VMs",
                 vg: "Volume Groups",
                 snapshots: "Snapshots",
@@ -903,6 +910,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 return 'sharedClone'; 
             }
             if (data.is_free) return 'freeSpace';
+            if (data.is_in_recycle_bin || (data.name && data.name === "Recycle Bin")) return 'recycleBin';
             if (data.is_to_remove || (data.name && (data.name.includes("to_remove") || data.name.includes("Pending Deletion")))) return 'pendingDeletion';
             if (data.name && data.name.startsWith("VM:")) return 'vm';
             if (data.name && data.name.startsWith("VG:")) return 'vg';
@@ -935,6 +943,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 return themeColors.sharedClone;
             }
             if (data.is_free) return themeColors.freeSpace;
+            if (data.is_in_recycle_bin || (data.name && data.name === "Recycle Bin")) return themeColors.recycleBin;
             if (data.is_to_remove || (data.name && data.name.includes("to_remove")) || (data.name && data.name.includes("Pending Deletion"))) return themeColors.pendingDeletion;
             if (data.name && data.name.startsWith("VM:")) return themeColors.vm;
             if (data.name && data.name.startsWith("VG:")) return themeColors.vg;

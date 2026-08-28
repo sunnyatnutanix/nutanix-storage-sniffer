@@ -41,7 +41,7 @@ def parse_vdisk_configure_printer(log_text: str):
         "to_remove", "shell_vdisk", "never_hosted", "has_complete_data", "is_metadata_vdisk", 
         "root_of_removable_subtree", "always_write_emap_extents", "avoid_vblock_copy_when_leaf", 
         "may_be_parent", "has_incomplete_ancestor", "snapshot_draining", "parent_draining", 
-        "clone_parent_draining"
+        "clone_parent_draining", "in_recycle_bin"
     ]
     str_keys = [
         "vdisk_name", "vdisk_uuid", "chain_id", "parent_chain_id", "lineage_id", "nfs_file_name", 

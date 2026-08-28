@@ -291,7 +291,6 @@ def process_container_centric_logs(sections: dict):
             chain_has_parent_chain[cid] = True
 
     chain_shared_cache = {}
-
     def compute_chain_shared_usage(chain_id: str):
         chain_id = str(chain_id or "").strip()
         if not chain_id:
@@ -569,9 +568,13 @@ def process_container_centric_logs(sections: dict):
                     vg_resolution_method = "nfs_vgdisk_path"
 
             is_to_remove = bool(vd.get("to_remove", False))
+            is_in_recycle_bin = bool(vd.get("in_recycle_bin", False))
             is_snapshot = "Immutable" in str(vd.get("mutability_state", ""))
             node["is_to_remove"] = is_to_remove
-            if is_to_remove:
+            node["is_in_recycle_bin"] = is_in_recycle_bin
+            if is_in_recycle_bin:
+                mapped_entity = "Recycle Bin"
+            elif is_to_remove:
                 mapped_entity = "Pending Deletion (to_remove)"
             elif is_snapshot:
                 mapped_entity = "Snapshots"
@@ -587,6 +590,8 @@ def process_container_centric_logs(sections: dict):
                 node["classification_reason"] = "vg"
             elif mapped_entity == "Snapshots":
                 node["classification_reason"] = "snapshot"
+            elif mapped_entity == "Recycle Bin":
+                node["classification_reason"] = "recycle_bin"
             elif mapped_entity == "Pending Deletion (to_remove)":
                 node["classification_reason"] = "pending_deletion"
             else:
@@ -609,13 +614,17 @@ def process_container_centric_logs(sections: dict):
                 parent_chain_id = parent_node.get("chain_id")
             has_shared_signal = curator_shared_estimate > 0
             is_snapshot_same_chain = False
+            include_same_chain_clone_shared = False
             added_to_shared_root = False
             if resolved_parent_vdisk_id:
                 immediate_parent_id = str(resolved_parent_vdisk_id)
                 parent_vd = vdisk_by_id.get(immediate_parent_id, {})
                 root_parent_id = lineage_root(immediate_parent_id)
                 is_snapshot_same_chain = is_same_chain_snapshot_continuation(vd, parent_vd)
-                if has_shared_signal and not is_snapshot_same_chain:
+                include_same_chain_clone_shared = bool(
+                    is_snapshot_same_chain and chain_shared.get("source") == "curator_chain_x2"
+                )
+                if has_shared_signal and (not is_snapshot_same_chain or include_same_chain_clone_shared):
                     child_shared_primary = curator_shared_estimate
                     if root_parent_id not in shared_root_nodes:
                         shared_root_nodes[root_parent_id] = {
@@ -646,6 +655,8 @@ def process_container_centric_logs(sections: dict):
                     added_to_shared_root = True
                 elif is_snapshot_same_chain:
                     node["classification_reason"] = "snapshot_same_chain_excluded_from_shared"
+                if include_same_chain_clone_shared:
+                    node["classification_reason"] = "snapshot_same_chain_included_for_clone_shared"
             elif (
                 has_shared_signal
                 and chain_id
@@ -697,7 +708,6 @@ def process_container_centric_logs(sections: dict):
                 "classification_reason": node.get("classification_reason"),
                 "resolved_root_parent_id": lineage_root(str(resolved_parent_vdisk_id)) if resolved_parent_vdisk_id else None
             })
-
         for group_nodes in entity_groups.values():
             group_nodes.sort(key=lambda x: x.get("real_bytes", 0), reverse=True)
 
@@ -1047,6 +1057,7 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
         vdisk_name = vd.get("vdisk_name", "")
         nfs_file_name = vd.get("nfs_file_name", "")
         is_to_remove = bool(vd.get("to_remove", False))
+        is_in_recycle_bin = bool(vd.get("in_recycle_bin", False))
         is_snapshot = "Immutable" in vd.get("mutability_state", "")
 
         mapped_vm = None
@@ -1072,7 +1083,9 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
             mapped_vg = disk_uuid_to_vg[nfs_file_name]
             vg_resolution_method = "nfs_file_name_uuid"
 
-        if is_to_remove:
+        if is_in_recycle_bin:
+            mapped_entity = "Recycle Bin"
+        elif is_to_remove:
             mapped_entity = "Pending Deletion (to_remove)"
         elif is_snapshot:
             mapped_entity = "Snapshots"
@@ -1096,6 +1109,7 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
             "value": exclusive_bytes if exclusive_bytes > 0 else NOMINAL_LAYOUT_BYTES,
             "real_bytes": exclusive_bytes,
             "formatted_size": format_bytes(exclusive_bytes),
+            "is_in_recycle_bin": is_in_recycle_bin,
             "mapped_vm_name": mapped_vm,
             "mapped_vg_name": mapped_vg,
             "mapped_entity_name": mapped_entity,
