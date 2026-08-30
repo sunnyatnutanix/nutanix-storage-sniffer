@@ -1,3 +1,6 @@
+<img width="3614" height="2226" alt="image" src="https://github.com/user-attachments/assets/2d1d9363-6aed-4c67-b4d2-aa91e308f198" />
+
+
 # Nutanix Storage Sniffer
 
 Nutanix Storage Sniffer is a FastAPI + static web UI tool to analyze Nutanix storage Pool data and visualize VDisk usage, chain relationships, and shared storage reference.
