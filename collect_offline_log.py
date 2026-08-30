@@ -116,9 +116,7 @@ def run_chunked_parallel(ids, chunk_size, max_workers, cmd_prefix, timeout_sec=2
 
 
 FAST_MODE = get_bool_env("FAST_MODE", False)
-SKIP_NFS_LS = get_bool_env("SKIP_NFS_LS", False)
 MAX_CONTAINERS = get_int_env("MAX_CONTAINERS", 0)
-NFS_WORKERS = max(1, get_int_env("NFS_WORKERS", 4))
 CURATOR_WORKERS = max(1, get_int_env("CURATOR_WORKERS", 4))
 CURATOR_VDISK_CHUNK = max(1, get_int_env("CURATOR_VDISK_CHUNK", 80 if FAST_MODE else 120))
 CURATOR_CHAIN_CHUNK = max(1, get_int_env("CURATOR_CHAIN_CHUNK", 80 if FAST_MODE else 120))
@@ -134,7 +132,7 @@ ncli_sp = run_cmd("ncli storagepool ls", timeout_sec=60)
 vdisk_cfg = run_binary("vdisk_config_printer", timeout_sec=120)
 collector_timing["core_query_sec"] = round(time.time() - t0, 3)
 
-print("[2/7] Collecting per-container nfs_ls sections...")
+print("[2/7] Preparing container metadata for batching...")
 container_names = []
 for m in re.finditer(r"^\s*Name\s*:\s*([^\n]+)", ncli_ctr, re.MULTILINE):
     nm = m.group(1).strip()
@@ -142,21 +140,7 @@ for m in re.finditer(r"^\s*Name\s*:\s*([^\n]+)", ncli_ctr, re.MULTILINE):
         container_names.append(nm)
 if MAX_CONTAINERS > 0:
     container_names = container_names[:MAX_CONTAINERS]
-if SKIP_NFS_LS:
-    nfs_ls_out = ""
-    collector_timing["nfs_ls_sec"] = 0.0
-else:
-    t0 = time.time()
-    def collect_nfs(cname):
-        nfs_cmd = "nfs_ls -liaRh '/%s'" % cname.replace("'", "'\\''")
-        nfs_out = run_cmd(nfs_cmd, timeout_sec=120 if FAST_MODE else 180)
-        return cname, "###CONTAINER:%s\n%s\n###CONTAINER_END###" % (cname, nfs_out)
-
-    with ThreadPoolExecutor(max_workers=NFS_WORKERS) as ex:
-        nfs_rows = list(ex.map(collect_nfs, container_names))
-    nfs_rows.sort(key=lambda x: x[0])
-    nfs_ls_out = "\n".join([r[1] for r in nfs_rows])
-    collector_timing["nfs_ls_sec"] = round(time.time() - t0, 3)
+collector_timing["nfs_ls_sec"] = 0.0
 
 print("[3/7] Parsing IDs for curator batching...")
 raw_vdisk_ids = sorted(
@@ -202,8 +186,8 @@ collector_timing["container_count"] = len(container_names)
 collector_timing["vdisk_count"] = len(raw_vdisk_ids)
 collector_timing["chain_count"] = len(raw_chain_ids)
 collector_timing["fast_mode"] = FAST_MODE
-collector_timing["skip_nfs_ls"] = SKIP_NFS_LS
-collector_timing["collector_workers"] = {"nfs": NFS_WORKERS, "curator": CURATOR_WORKERS}
+collector_timing["skip_nfs_ls"] = True
+collector_timing["collector_workers"] = {"curator": CURATOR_WORKERS}
 collector_timing["collector_chunk"] = {"vdisk": CURATOR_VDISK_CHUNK, "chain": CURATOR_CHAIN_CHUNK, "retry": CURATOR_RETRY_CHUNK}
 
 out_filename = "vdisk_sniffer_offline.log"
@@ -214,7 +198,6 @@ with open(out_filename, "w") as f:
     f.write("===NCLI_VM_START===\n" + ncli_vm + "\n")
     f.write("===NCLI_VG_START===\n" + ncli_vg + "\n")
     f.write("===NCLI_CTR_START===\n" + ncli_ctr + "\n")
-    f.write("===NFS_LS_START===\n" + nfs_ls_out + "\n")
     f.write("===CURATOR_START===\n" + curator_out + "\n")
     f.write("===CURATOR_CHAIN_USAGE_START===\n" + curator_chain_out + "\n")
     f.write("===COLLECTOR_TIMING_START===\n" + json.dumps(collector_timing) + "\n")

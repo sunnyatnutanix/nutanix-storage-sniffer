@@ -22,10 +22,8 @@ from app.parser import (
     parse_ncli_containers,
     parse_snapshot_tree_chain_ids,
     parse_ncli_containers_detailed,
-    parse_nfs_ls_sections,
-    parse_nfs_ls_sections_detailed,
-    parse_vdisk_map_by_nfs,
 )
+from app.model_chain import VdiskNode, ChainNode, ChainTree, ContainerGraph
 
 LOG_DIR = "/app/logs"
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -290,8 +288,27 @@ def process_container_centric_logs(sections: dict):
         if p_chain and p_chain != cid:
             chain_has_parent_chain[cid] = True
 
-    chain_shared_cache = {}
+    debug_target_chain_ids = {
+        "11b3f48e-031b-4e71-88c9-9fcecf8c060b",
+        "012ac263-463e-45c7-9427-e4f8e427efb1",
+    }
+    debug_target_root_vdisk_ids = {"76193", "76189"}
 
+    # #region agent log
+    _debug_emit(
+        debug_run_id, "H1",
+        "app/main.py:process_container_centric_logs:chain_parent_flag",
+        "Target chain parent-chain eligibility",
+        {
+            "target_chain_parent_flags": {
+                cid: bool(chain_has_parent_chain.get(cid, False))
+                for cid in sorted(debug_target_chain_ids)
+            }
+        }
+    )
+    # #endregion
+
+    chain_shared_cache = {}
     def compute_chain_shared_usage(chain_id: str):
         chain_id = str(chain_id or "").strip()
         if not chain_id:
@@ -461,6 +478,8 @@ def process_container_centric_logs(sections: dict):
         nfs_names = [n for n in nfs_map.get(c_name, []) if n in valid_nfs_names]
         entity_groups = {}
         shared_root_nodes = {}
+        dummy_root_candidates_by_chain = {}
+        chain_ids_with_real_root = set()
         c_total = 0
 
         debug_classification_rows = []
@@ -569,9 +588,13 @@ def process_container_centric_logs(sections: dict):
                     vg_resolution_method = "nfs_vgdisk_path"
 
             is_to_remove = bool(vd.get("to_remove", False))
+            is_in_recycle_bin = bool(vd.get("in_recycle_bin", False))
             is_snapshot = "Immutable" in str(vd.get("mutability_state", ""))
             node["is_to_remove"] = is_to_remove
-            if is_to_remove:
+            node["is_in_recycle_bin"] = is_in_recycle_bin
+            if is_in_recycle_bin:
+                mapped_entity = "Recycle Bin"
+            elif is_to_remove:
                 mapped_entity = "Pending Deletion (to_remove)"
             elif is_snapshot:
                 mapped_entity = "Snapshots"
@@ -587,6 +610,8 @@ def process_container_centric_logs(sections: dict):
                 node["classification_reason"] = "vg"
             elif mapped_entity == "Snapshots":
                 node["classification_reason"] = "snapshot"
+            elif mapped_entity == "Recycle Bin":
+                node["classification_reason"] = "recycle_bin"
             elif mapped_entity == "Pending Deletion (to_remove)":
                 node["classification_reason"] = "pending_deletion"
             else:
@@ -609,13 +634,46 @@ def process_container_centric_logs(sections: dict):
                 parent_chain_id = parent_node.get("chain_id")
             has_shared_signal = curator_shared_estimate > 0
             is_snapshot_same_chain = False
+            include_same_chain_clone_shared = False
+            include_same_chain_vg_shared = False
             added_to_shared_root = False
             if resolved_parent_vdisk_id:
                 immediate_parent_id = str(resolved_parent_vdisk_id)
                 parent_vd = vdisk_by_id.get(immediate_parent_id, {})
                 root_parent_id = lineage_root(immediate_parent_id)
                 is_snapshot_same_chain = is_same_chain_snapshot_continuation(vd, parent_vd)
-                if has_shared_signal and not is_snapshot_same_chain:
+                include_same_chain_clone_shared = bool(
+                    is_snapshot_same_chain and chain_shared.get("source") == "curator_chain_x2"
+                )
+                include_same_chain_vg_shared = bool(
+                    is_snapshot_same_chain and str(mapped_entity).startswith("VG:") and has_shared_signal
+                )
+                if has_shared_signal and (
+                    not is_snapshot_same_chain
+                    or include_same_chain_clone_shared
+                    or include_same_chain_vg_shared
+                ):
+                    if chain_id in debug_target_chain_ids or root_parent_id in debug_target_root_vdisk_ids:
+                        # #region agent log
+                        _debug_emit(
+                            debug_run_id, "H2",
+                            "app/main.py:process_container_centric_logs:real_root_candidate",
+                            "Real-root candidate evaluated for target lineage",
+                            {
+                                "container_name": c_name,
+                                "vdisk_id": vdisk_id,
+                                "chain_id": chain_id,
+                                "resolved_parent_vdisk_id": resolved_parent_vdisk_id,
+                                "root_parent_id": root_parent_id,
+                                "has_shared_signal": has_shared_signal,
+                                "is_snapshot_same_chain": is_snapshot_same_chain,
+                                "include_same_chain_clone_shared": include_same_chain_clone_shared,
+                                "include_same_chain_vg_shared": include_same_chain_vg_shared,
+                                "shared_source": chain_shared.get("source"),
+                                "shared_bytes": curator_shared_estimate,
+                            }
+                        )
+                        # #endregion
                     child_shared_primary = curator_shared_estimate
                     if root_parent_id not in shared_root_nodes:
                         shared_root_nodes[root_parent_id] = {
@@ -642,10 +700,16 @@ def process_container_centric_logs(sections: dict):
                         shared_root_nodes[root_parent_id]["anchor_vdisk_id"] = shared_root_nodes[root_parent_id].get("anchor_vdisk_id") or immediate_parent_id
                         shared_root_nodes[root_parent_id]["child_vdisk_ids"].append(vdisk_id)
                         shared_root_nodes[root_parent_id]["immediate_parent_ids"].append(immediate_parent_id)
+                    if chain_id:
+                        chain_ids_with_real_root.add(chain_id)
                     node["classification_reason"] = "shared_clone_lineage"
                     added_to_shared_root = True
                 elif is_snapshot_same_chain:
                     node["classification_reason"] = "snapshot_same_chain_excluded_from_shared"
+                if include_same_chain_clone_shared:
+                    node["classification_reason"] = "snapshot_same_chain_included_for_clone_shared"
+                if include_same_chain_vg_shared:
+                    node["classification_reason"] = "snapshot_same_chain_included_for_vg_shared"
             elif (
                 has_shared_signal
                 and chain_id
@@ -653,9 +717,29 @@ def process_container_centric_logs(sections: dict):
                 and chain_shared.get("source") == "snapshot_chain_live2_peg_minus_exclusive_sum"
             ):
                 synthetic_root_id = f"dummy-root-chain-{chain_id}"
+                if chain_id in debug_target_chain_ids:
+                    # #region agent log
+                    _debug_emit(
+                        debug_run_id, "H3",
+                        "app/main.py:process_container_centric_logs:dummy_root_candidate",
+                        "Dummy-root candidate evaluated for target lineage",
+                        {
+                            "container_name": c_name,
+                            "vdisk_id": vdisk_id,
+                            "chain_id": chain_id,
+                            "synthetic_root_id": synthetic_root_id,
+                            "has_shared_signal": has_shared_signal,
+                            "chain_has_parent_chain": bool(chain_has_parent_chain.get(chain_id, False)),
+                            "shared_source": chain_shared.get("source"),
+                            "shared_bytes": curator_shared_estimate,
+                        }
+                    )
+                    # #endregion
                 child_shared_primary = curator_shared_estimate
-                if synthetic_root_id not in shared_root_nodes:
-                    shared_root_nodes[synthetic_root_id] = {
+                chain_dummy = dummy_root_candidates_by_chain.get(chain_id)
+                if not chain_dummy:
+                    chain_dummy = {
+                        "synthetic_root_id": synthetic_root_id,
                         "max_curator_shared_estimated_bytes": curator_shared_estimate,
                         "max_primary_shared_bytes": child_shared_primary,
                         "is_dummy_lineage_root": True,
@@ -666,18 +750,19 @@ def process_container_centric_logs(sections: dict):
                         "child_vdisk_ids": [vdisk_id],
                         "immediate_parent_ids": []
                     }
+                    dummy_root_candidates_by_chain[chain_id] = chain_dummy
                 else:
-                    if child_shared_primary >= int(shared_root_nodes[synthetic_root_id].get("max_primary_shared_bytes", 0)):
-                        shared_root_nodes[synthetic_root_id]["shared_formula_source"] = chain_shared.get("source")
-                        shared_root_nodes[synthetic_root_id]["shared_formula_terms"] = chain_shared.get("terms", {})
-                        shared_root_nodes[synthetic_root_id]["anchor_vdisk_id"] = vdisk_id
-                    shared_root_nodes[synthetic_root_id]["max_curator_shared_estimated_bytes"] = max(
-                        shared_root_nodes[synthetic_root_id]["max_curator_shared_estimated_bytes"], curator_shared_estimate
+                    if child_shared_primary >= int(chain_dummy.get("max_primary_shared_bytes", 0)):
+                        chain_dummy["shared_formula_source"] = chain_shared.get("source")
+                        chain_dummy["shared_formula_terms"] = chain_shared.get("terms", {})
+                        chain_dummy["anchor_vdisk_id"] = vdisk_id
+                    chain_dummy["max_curator_shared_estimated_bytes"] = max(
+                        chain_dummy["max_curator_shared_estimated_bytes"], curator_shared_estimate
                     )
-                    shared_root_nodes[synthetic_root_id]["max_primary_shared_bytes"] = max(
-                        shared_root_nodes[synthetic_root_id]["max_primary_shared_bytes"], child_shared_primary
+                    chain_dummy["max_primary_shared_bytes"] = max(
+                        chain_dummy["max_primary_shared_bytes"], child_shared_primary
                     )
-                    shared_root_nodes[synthetic_root_id]["child_vdisk_ids"].append(vdisk_id)
+                    chain_dummy["child_vdisk_ids"].append(vdisk_id)
                 node["classification_reason"] = "shared_clone_lineage_dummy_root"
                 added_to_shared_root = True
 
@@ -697,7 +782,11 @@ def process_container_centric_logs(sections: dict):
                 "classification_reason": node.get("classification_reason"),
                 "resolved_root_parent_id": lineage_root(str(resolved_parent_vdisk_id)) if resolved_parent_vdisk_id else None
             })
-
+        for candidate_chain_id, candidate_info in dummy_root_candidates_by_chain.items():
+            if candidate_chain_id in chain_ids_with_real_root:
+                continue
+            candidate_root_id = str(candidate_info.get("synthetic_root_id"))
+            shared_root_nodes[candidate_root_id] = candidate_info
         for group_nodes in entity_groups.values():
             group_nodes.sort(key=lambda x: x.get("real_bytes", 0), reverse=True)
 
@@ -744,6 +833,24 @@ def process_container_centric_logs(sections: dict):
                 "is_to_remove": bool(parent_vd.get("to_remove", False)),
                 "root_chain_id": root_chain_id,
             })
+            if str(node_vdisk_id) in debug_target_root_vdisk_ids or str(root_chain_id) in debug_target_chain_ids:
+                # #region agent log
+                _debug_emit(
+                    debug_run_id, "H4",
+                    "app/main.py:process_container_centric_logs:shared_node_emit",
+                    "Shared node emitted for target root or chain",
+                    {
+                        "container_name": c_name,
+                        "node_name": node_name,
+                        "node_vdisk_id": node_vdisk_id,
+                        "is_dummy_lineage_root": is_dummy_root,
+                        "root_chain_id": root_chain_id,
+                        "shared_storage_bytes": primary_shared,
+                        "child_vdisk_ids": sorted(set(info.get("child_vdisk_ids", []))),
+                        "immediate_parent_ids": sorted(set(info.get("immediate_parent_ids", []))),
+                    }
+                )
+                # #endregion
         # #region agent log
         _debug_emit(
             debug_run_id, "H2",
@@ -768,6 +875,28 @@ def process_container_centric_logs(sections: dict):
             }
         )
         # #endregion
+        target_chain_root_entries = []
+        for _pvid, _info in shared_root_nodes.items():
+            if str(_info.get("root_chain_id") or "") in debug_target_chain_ids:
+                target_chain_root_entries.append({
+                    "root_id": str(_pvid),
+                    "is_dummy_lineage_root": bool(_info.get("is_dummy_lineage_root", False)),
+                    "root_chain_id": str(_info.get("root_chain_id") or ""),
+                    "max_primary_shared_bytes": int(_info.get("max_primary_shared_bytes", 0) or 0),
+                    "child_vdisk_ids": sorted(set(_info.get("child_vdisk_ids", []))),
+                })
+        if target_chain_root_entries:
+            # #region agent log
+            _debug_emit(
+                debug_run_id, "H5",
+                "app/main.py:process_container_centric_logs:target_chain_root_summary",
+                "Target chain root entries summary before final shared nodes",
+                {
+                    "container_name": c_name,
+                    "target_chain_root_entries": target_chain_root_entries,
+                }
+            )
+            # #endregion
         shared_storage_nodes.sort(key=lambda x: x.get("real_bytes", 0), reverse=True)
         shared_storage_total = sum(n.get("real_bytes", 0) for n in shared_storage_nodes)
 
@@ -874,10 +1003,458 @@ def process_container_centric_logs(sections: dict):
         }
     }
 
+def _extract_parent_links(vdisks: list):
+    parent_by_child = {}
+    children_by_parent = {}
+    for vd in vdisks:
+        child_id = vd.get("vdisk_id")
+        if child_id is None:
+            continue
+        child_s = str(child_id)
+        parent_id = vd.get("parent_vdisk_id")
+        clone_source_id = vd.get("clone_source_vdisk_id")
+        resolved_parent = None
+        if parent_id is not None and str(parent_id).strip() and str(parent_id) != "0":
+            resolved_parent = str(parent_id)
+        elif clone_source_id is not None and str(clone_source_id).strip() and str(clone_source_id) != "0":
+            resolved_parent = str(clone_source_id)
+        if resolved_parent:
+            parent_by_child[child_s] = resolved_parent
+            children_by_parent.setdefault(resolved_parent, []).append(child_s)
+    return parent_by_child, children_by_parent
+
+
+def process_container_chain_graph_logs(sections: dict):
+    collector_timing = {}
+    try:
+        collector_timing = json.loads(sections.get("===COLLECTOR_TIMING_START===", "") or "{}")
+    except Exception:
+        collector_timing = {}
+
+    vdisks = parse_vdisk_configure_printer(sections.get("===VDISK_CFG_START===", ""))
+    vdisk_by_id = {str(vd.get("vdisk_id")): vd for vd in vdisks if vd.get("vdisk_id") is not None}
+    parent_by_child, children_by_parent = _extract_parent_links(vdisks)
+
+    def lineage_root(vdisk_id: str):
+        cur = str(vdisk_id or "")
+        seen = set()
+        while cur and cur in parent_by_child and cur not in seen:
+            seen.add(cur)
+            cur = str(parent_by_child.get(cur) or "")
+        return cur or None
+
+    def lineage_role(vdisk_id: str):
+        vid = str(vdisk_id or "")
+        has_parent = vid in parent_by_child
+        has_children = len(children_by_parent.get(vid, [])) > 0
+        if has_parent and has_children:
+            return "intermediate"
+        if has_children:
+            return "root"
+        return "leaf"
+    containers = parse_ncli_containers_detailed(sections.get("===NCLI_CTR_START===", ""))
+    vms = parse_ncli_vms(sections.get("===NCLI_VM_START===", ""))
+    vgs = parse_ncli_volume_groups(sections.get("===NCLI_VG_START===", ""))
+    usage_map = parse_curator_usage(sections.get("===CURATOR_START===", ""))
+    chain_usage_map = parse_curator_chain_usage(sections.get("===CURATOR_CHAIN_USAGE_START===", ""))
+    sp_info = parse_ncli_storage_pool(sections.get("===NCLI_SP_START===", ""))
+
+    vm_by_vdisk_id = {}
+    vm_by_owner_key = {}
+    for vm_data in vms.values():
+        vm_name = vm_data.get("name")
+        if not vm_name:
+            continue
+        vm_uuid = str(vm_data.get("uuid") or "").strip()
+        if vm_uuid:
+            vm_by_owner_key[vm_uuid] = vm_name
+        for vid in vm_data.get("vdisk_ids", []):
+            vm_by_vdisk_id[str(vid)] = vm_name
+        for token in vm_data.get("vdisks", []):
+            tail = str(token).split("::")[-1].strip()
+            if tail:
+                vm_by_vdisk_id[tail] = vm_name
+
+    disk_uuid_to_vg = {}
+    for _, vg in vgs.items():
+        for disk_uuid in vg.get("disk_uuids", []):
+            disk_uuid_to_vg[disk_uuid] = vg.get("name")
+
+    chain_to_vdisk_ids = {}
+    for vd in vdisks:
+        cid = str(vd.get("chain_id") or "").strip()
+        vid = str(vd.get("vdisk_id") or "").strip()
+        if cid and vid:
+            chain_to_vdisk_ids.setdefault(cid, [])
+            if vid not in chain_to_vdisk_ids[cid]:
+                chain_to_vdisk_ids[cid].append(vid)
+
+    chain_nodes = {}
+    for chain_id, chain_vdisk_ids in chain_to_vdisk_ids.items():
+        stats = chain_usage_map.get(chain_id, {})
+        logical_live = int(stats.get("logical_live", 0) or 0)
+        logical_clone = int(stats.get("logical_shared_clone", 0) or 0)
+        logical_exclusive_snapshot = int(stats.get("logical_exclusive_snapshot", 0) or 0)
+        physical_peg = int(stats.get("physical_peg", 0) or 0)
+        exclusive_sum = sum(int(usage_map.get(str(vd_id), 0) or 0) for vd_id in chain_vdisk_ids)
+        if logical_clone > 0:
+            shared_bytes = (logical_clone * 2) + physical_peg
+            source = "curator_chain_x2"
+        elif len(chain_vdisk_ids) <= 1:
+            shared_bytes = 0
+            source = "single_vdisk_zero_clone_no_shared"
+        else:
+            shared_bytes = (logical_live * 2) + physical_peg - exclusive_sum
+            source = "snapshot_chain_live2_peg_minus_exclusive_sum"
+        chain_nodes[chain_id] = ChainNode(
+            chain_id=chain_id,
+            vdisk_ids=list(chain_vdisk_ids),
+            logical_live=logical_live,
+            logical_shared_clone=logical_clone,
+            logical_exclusive_snapshot=logical_exclusive_snapshot,
+            physical_peg=physical_peg,
+            shared_bytes=int(max(0, shared_bytes)),
+            shared_formula_source=source,
+            shared_formula_terms={
+                "logical_live": logical_live,
+                "logical_shared_clone": logical_clone,
+                "physical_peg": physical_peg,
+                "exclusive_sum": exclusive_sum,
+            },
+        )
+
+    # Build chain graph edges.
+    for vd in vdisks:
+        child_chain = str(vd.get("chain_id") or "").strip()
+        if not child_chain or child_chain not in chain_nodes:
+            continue
+        explicit_parent_chain = str(vd.get("parent_chain_id") or "").strip()
+        parent_chain_candidates = []
+        if explicit_parent_chain and explicit_parent_chain != child_chain:
+            parent_chain_candidates.append(explicit_parent_chain)
+        parent_vdisk_id = parent_by_child.get(str(vd.get("vdisk_id") or ""))
+        if parent_vdisk_id:
+            parent_vd = vdisk_by_id.get(str(parent_vdisk_id), {})
+            inferred_parent_chain = str(parent_vd.get("chain_id") or "").strip()
+            if inferred_parent_chain and inferred_parent_chain != child_chain:
+                parent_chain_candidates.append(inferred_parent_chain)
+        for parent_chain in parent_chain_candidates:
+            if parent_chain not in chain_nodes:
+                chain_nodes[parent_chain] = ChainNode(chain_id=parent_chain)
+            chain_nodes[child_chain].parent_chain_ids.add(parent_chain)
+            chain_nodes[parent_chain].child_chain_ids.add(child_chain)
+
+    container_by_id = {str(c.get("id_short")): c for c in containers if c.get("id_short") is not None}
+    vdisk_nodes = {}
+    for vd in vdisks:
+        vdisk_id = str(vd.get("vdisk_id") or "").strip()
+        if not vdisk_id:
+            continue
+        chain_id = str(vd.get("chain_id") or "").strip()
+        container_id = str(vd.get("container_id") or "").strip()
+        is_snapshot = "Immutable" in str(vd.get("mutability_state", ""))
+        is_to_remove = bool(vd.get("to_remove", False))
+        is_in_recycle_bin = bool(vd.get("in_recycle_bin", False))
+        nfs_file_name = str(vd.get("nfs_file_name") or "").strip()
+        owner_id = str(vd.get("owner_id") or "").strip()
+        vm_name = (
+            vm_by_vdisk_id.get(vdisk_id)
+            or vm_by_owner_key.get(owner_id)
+            or vm_by_vdisk_id.get(str(vd.get("vdisk_name") or "").strip())
+            or vm_by_vdisk_id.get(nfs_file_name)
+        )
+        mapped_vg = None
+        vdisk_uuid = str(vd.get("vdisk_uuid") or "").strip()
+        if vdisk_uuid and vdisk_uuid in disk_uuid_to_vg:
+            mapped_vg = disk_uuid_to_vg[vdisk_uuid]
+        elif nfs_file_name and nfs_file_name in disk_uuid_to_vg:
+            mapped_vg = disk_uuid_to_vg[nfs_file_name]
+
+        entity_type = "vdisk"
+        entity_name = "VDisks"
+        if is_in_recycle_bin:
+            entity_type, entity_name = "recycle_bin", "Recycle Bin"
+        elif is_to_remove:
+            entity_type, entity_name = "pending_deletion", "Pending Deletion (to_remove)"
+        elif is_snapshot:
+            entity_type, entity_name = "snapshot", "Snapshots"
+        elif vm_name:
+            entity_type, entity_name = "vm", f"VM: {vm_name}"
+        elif mapped_vg:
+            entity_type, entity_name = "vg", f"VG: {mapped_vg}"
+
+        vdisk_nodes[vdisk_id] = VdiskNode(
+            vdisk_id=vdisk_id,
+            chain_id=chain_id,
+            container_id=container_id,
+            parent_vdisk_id=parent_by_child.get(vdisk_id),
+            parent_chain_id=(str(vd.get("parent_chain_id") or "").strip() or None),
+            children_vdisk_ids=list(children_by_parent.get(vdisk_id, [])),
+            exclusive_bytes=int(usage_map.get(vdisk_id, 0) or 0),
+            entity_type=entity_type,
+            entity_name=entity_name,
+            vm_name=vm_name,
+            vg_name=mapped_vg,
+            is_snapshot=is_snapshot,
+            is_to_remove=is_to_remove,
+            is_in_recycle_bin=is_in_recycle_bin,
+        )
+
+    # Chain trees: root by chain_id where no parent chain exists.
+    roots = [cid for cid, node in chain_nodes.items() if not node.parent_chain_ids]
+    visited = set()
+    chain_trees = []
+    for root_chain_id in sorted(roots):
+        if root_chain_id in visited:
+            continue
+        stack = [root_chain_id]
+        members = []
+        while stack:
+            cid = stack.pop()
+            if cid in visited:
+                continue
+            visited.add(cid)
+            members.append(cid)
+            stack.extend(sorted(chain_nodes[cid].child_chain_ids))
+        leaves = [cid for cid in members if len([c for c in chain_nodes[cid].child_chain_ids if c in members]) == 0]
+        leaf_candidates = [{"chain_id": cid, "shared_bytes": int(chain_nodes[cid].shared_bytes)} for cid in leaves]
+        selected = max(leaf_candidates, key=lambda x: x["shared_bytes"]) if leaf_candidates else {"chain_id": None, "shared_bytes": 0}
+        chain_trees.append(
+            ChainTree(
+                chain_tree_id=f"chain-tree-{root_chain_id}",
+                root_chain_id=root_chain_id,
+                member_chain_ids=sorted(members),
+                leaf_chain_ids=sorted(leaves),
+                selected_shared_chain_id=selected.get("chain_id"),
+                selected_shared_bytes=int(selected.get("shared_bytes", 0)),
+                leaf_candidates=leaf_candidates,
+            )
+        )
+
+    container_graphs = {}
+    for c in containers:
+        container_id = str(c.get("id_short") or "")
+        container_name = c.get("name", f"Container-{container_id}")
+        try:
+            rf = int(str(c.get("replication_factor") or "2").strip())
+            if rf <= 0:
+                rf = 2
+        except Exception:
+            rf = 2
+        container_graphs[container_id] = ContainerGraph(
+            container_id=container_id,
+            container_name=container_name,
+            replication_factor=rf,
+        )
+
+    for v in vdisk_nodes.values():
+        cg = container_graphs.get(v.container_id)
+        if not cg:
+            continue
+        cg.vdisk_ids.append(v.vdisk_id)
+        cg.entity_groups.setdefault(v.entity_name, []).append(v.vdisk_id)
+
+    for tree in chain_trees:
+        member_containers = set()
+        for cid in tree.member_chain_ids:
+            for vid in chain_nodes.get(cid, ChainNode(chain_id=cid)).vdisk_ids:
+                vnode = vdisk_nodes.get(str(vid))
+                if vnode:
+                    member_containers.add(vnode.container_id)
+        for container_id in member_containers:
+            cg = container_graphs.get(container_id)
+            if cg:
+                cg.chain_trees.append(tree)
+
+    container_nodes = []
+    total_physical = 0
+    for container_id, cg in container_graphs.items():
+        c = container_by_id.get(container_id, {})
+        container_children = []
+        c_total = 0
+
+        for group_name, group_vdisk_ids in cg.entity_groups.items():
+            group_nodes = []
+            group_total = 0
+            for vid in group_vdisk_ids:
+                vd = vdisk_by_id.get(vid, {})
+                vnode = vdisk_nodes.get(vid)
+                if not vnode:
+                    continue
+                chain_node = chain_nodes.get(vnode.chain_id, ChainNode(chain_id=vnode.chain_id))
+                params_reserved = int(((vd.get("params") or {}).get("total_reserved_capacity", 0)) or 0)
+                has_hint_total_reserved_capacity = "hint_total_reserved_capacity" in vd
+                thick_raw = params_reserved if (params_reserved > 0 and not has_hint_total_reserved_capacity) else 0
+                thick_scaled = thick_raw * cg.replication_factor if thick_raw > 0 else 0
+                primary_usage = thick_scaled if thick_raw > 0 else vnode.exclusive_bytes
+                group_total += primary_usage
+                c_total += primary_usage
+                group_nodes.append({
+                    **vd,
+                    "name": str(vid),
+                    "value": primary_usage if primary_usage > 0 else 1,
+                    "real_bytes": primary_usage,
+                    "formatted_size": format_bytes(primary_usage),
+                    "display_source": "thick_prov_total_reserved_capacity_x_rf" if thick_raw > 0 else "curator_cli",
+                    "is_thick_prov_vdisk": thick_raw > 0,
+                    "thick_prov_raw_bytes": thick_raw,
+                    "thick_prov_vdisk_bytes": thick_scaled,
+                    "is_in_recycle_bin": vnode.is_in_recycle_bin,
+                    "mapped_vm_name": vnode.vm_name,
+                    "mapped_vg_name": vnode.vg_name,
+                    "mapped_entity_name": group_name,
+                    "parent_vdisk_id": vnode.parent_vdisk_id,
+                    "children_vdisk_ids": sorted(list(vnode.children_vdisk_ids), key=lambda x: int(x) if str(x).isdigit() else str(x)),
+                    "lineage_summary": {
+                        "current_vdisk_id": str(vnode.vdisk_id),
+                        "lineage_root_vdisk_id": lineage_root(vnode.vdisk_id),
+                        "parent_vdisk_id": vnode.parent_vdisk_id,
+                        "children_vdisk_ids": sorted(list(vnode.children_vdisk_ids), key=lambda x: int(x) if str(x).isdigit() else str(x)),
+                        "lineage_role": lineage_role(vnode.vdisk_id),
+                    },
+                    "chain_stats": {
+                        "logical_exclusive": int(chain_node.shared_formula_terms.get("exclusive_sum", 0) or 0),
+                        "logical_live": int(chain_node.logical_live or 0),
+                        "logical_shared_clone": int(chain_node.logical_shared_clone or 0),
+                        "logical_exclusive_snapshot": int(chain_node.logical_exclusive_snapshot or 0),
+                        "physical_peg": int(chain_node.physical_peg or 0),
+                    },
+                    "shared_formula_source": chain_node.shared_formula_source,
+                    "shared_formula_terms": chain_node.shared_formula_terms,
+                })
+            group_nodes.sort(key=lambda x: int(x.get("real_bytes", 0) or 0), reverse=True)
+            container_children.append({
+                "name": group_name,
+                "aggregate_exclusive_bytes": group_total,
+                "formatted_size": format_bytes(group_total),
+                "children": group_nodes,
+            })
+
+        shared_storage_nodes = []
+        for tree in cg.chain_trees:
+            selected_chain_id = tree.selected_shared_chain_id
+            if not selected_chain_id:
+                continue
+            selected_chain = chain_nodes.get(selected_chain_id)
+            if not selected_chain or selected_chain.shared_bytes <= 0:
+                continue
+            shared_storage_nodes.append({
+                "name": f"Root VDisk-Chain-{selected_chain_id}",
+                # Synthetic aggregate node: do not reuse a real vdisk_id.
+                "vdisk_id": None,
+                "chain_id": selected_chain_id,
+                "root_chain_id": tree.root_chain_id,
+                "chain_tree_id": tree.chain_tree_id,
+                "member_chain_ids": tree.member_chain_ids,
+                "leaf_chain_ids": tree.leaf_chain_ids,
+                "leaf_candidates": tree.leaf_candidates,
+                "selected_shared_chain_id": selected_chain_id,
+                "selected_shared_bytes": int(tree.selected_shared_bytes),
+                "is_shared_parent_vdisk": True,
+                "is_dummy_lineage_root": False,
+                "value": int(tree.selected_shared_bytes),
+                "real_bytes": int(tree.selected_shared_bytes),
+                "shared_storage_bytes": int(tree.selected_shared_bytes),
+                "shared_storage_curator_estimated_bytes": int(tree.selected_shared_bytes),
+                "shared_formula_source": selected_chain.shared_formula_source,
+                "shared_formula_terms": selected_chain.shared_formula_terms,
+                "display_source": selected_chain.shared_formula_source,
+                "formatted_size": format_bytes(int(tree.selected_shared_bytes)),
+                "container_name": cg.container_name,
+            })
+        shared_storage_nodes.sort(key=lambda x: int(x.get("real_bytes", 0) or 0), reverse=True)
+        shared_total = sum(int(n.get("real_bytes", 0) or 0) for n in shared_storage_nodes)
+        if shared_storage_nodes:
+            container_children.append({
+                "name": "Shared Storage",
+                "aggregate_exclusive_bytes": shared_total,
+                "formatted_size": format_bytes(shared_total),
+                "children": shared_storage_nodes,
+            })
+
+        explicit_res_bytes = int(c.get("explicit_res_logical_bytes", 0) or 0)
+        explicit_res_scaled_bytes = explicit_res_bytes * cg.replication_factor
+        other_total = c_total + shared_total
+        explicit_residual_bytes = explicit_res_scaled_bytes - other_total
+        if explicit_residual_bytes > 0:
+            container_children.append({
+                "name": "Reserved Available Space",
+                "aggregate_exclusive_bytes": explicit_residual_bytes,
+                "formatted_size": format_bytes(explicit_residual_bytes),
+                "children": [{
+                    "name": "Reserved Available Space",
+                    "is_explicit_reserve_block": True,
+                    "container_name": cg.container_name,
+                    "value": explicit_residual_bytes,
+                    "real_bytes": explicit_residual_bytes,
+                    "raw_explicit_reserve_bytes": explicit_res_bytes,
+                    "scaled_explicit_reserve_bytes": explicit_res_scaled_bytes,
+                    "other_container_total_bytes": other_total,
+                    "formula": "reserved_available_space_equals_explicit_res_logical_x_rf_minus_all_container_usage",
+                    "scaled_by_replication_factor": True,
+                    "display_source": "ncli_container_logical_residual",
+                    "formatted_size": format_bytes(explicit_residual_bytes),
+                }]
+            })
+
+        c_total_with_shared = other_total + max(0, explicit_residual_bytes)
+        total_physical += c_total_with_shared
+        container_children.sort(key=lambda g: (-int(g.get("aggregate_exclusive_bytes", 0) or 0), str(g.get("name", ""))))
+        container_nodes.append({
+            "name": cg.container_name,
+            "container_id": container_id,
+            "container_vdisk_count": len(cg.vdisk_ids),
+            "aggregate_exclusive_bytes": c_total_with_shared,
+            "formatted_size": format_bytes(c_total_with_shared),
+            "container_used_space_physical": c.get("used_space_physical"),
+            "container_used_space_physical_bytes": c.get("used_space_physical_bytes", 0),
+            "container_free_space_physical": c.get("free_space_physical"),
+            "container_max_capacity_physical": c.get("max_capacity_physical"),
+            "explicit_res_logical": c.get("explicit_res_logical"),
+            "explicit_res_logical_bytes": explicit_res_bytes,
+            "explicit_res_logical_scaled_bytes": explicit_res_scaled_bytes,
+            "explicit_res_logical_residual_bytes": max(0, explicit_residual_bytes),
+            "thick_prov_logical": c.get("thick_prov_logical"),
+            "thick_prov_logical_bytes": c.get("thick_prov_logical_bytes", 0),
+            "replication_factor": cg.replication_factor,
+            "entity_groups": [{"name": n, "vdisk_ids": ids} for n, ids in cg.entity_groups.items()],
+            "chain_trees": [t.__dict__ for t in cg.chain_trees],
+            "children": container_children,
+        })
+
+    container_nodes.sort(key=lambda x: int(x.get("aggregate_exclusive_bytes", 0) or 0), reverse=True)
+    sp_capacity = sp_info.get("capacity_bytes", 0) or sp_info.get("used_bytes", 0)
+    sp_used = sp_info.get("used_bytes", total_physical)
+    sp_free = sp_info.get("free_bytes", max(sp_capacity - sp_used, 0))
+
+    return {
+        "status": "success",
+        "collector_timing": collector_timing,
+        "model_version": "chain_v2",
+        "tree": {
+            "name": f"Storage Pool: {sp_info.get('name', 'Nutanix_SP')}",
+            "formatted_size": format_bytes(sp_capacity),
+            "children": [
+                {
+                    "name": f"Used Space ({format_bytes(sp_used)})",
+                    "formatted_size": format_bytes(sp_used),
+                    "children": container_nodes
+                },
+                {
+                    "name": f"Free Space ({format_bytes(sp_free)})",
+                    "value": sp_free,
+                    "is_free": True,
+                    "formatted_size": format_bytes(sp_free)
+                }
+            ]
+        }
+    }
+
+
 def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
     sections = extract_log_sections(raw_output)
-    if sections.get("===NFS_LS_START===") and sections.get("===CURATOR_START===") and sections.get("===VDISK_CFG_START==="):
-        return process_container_centric_logs(sections)
+    if sections.get("===CURATOR_START===") and sections.get("===VDISK_CFG_START==="):
+        return process_container_chain_graph_logs(sections)
 
     vdisk_log = sections.get("===VDISK_CFG_START===", "")
     curator_chain_log = sections.get("===CURATOR_CHAIN_USAGE_START===", "")
@@ -1047,6 +1624,7 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
         vdisk_name = vd.get("vdisk_name", "")
         nfs_file_name = vd.get("nfs_file_name", "")
         is_to_remove = bool(vd.get("to_remove", False))
+        is_in_recycle_bin = bool(vd.get("in_recycle_bin", False))
         is_snapshot = "Immutable" in vd.get("mutability_state", "")
 
         mapped_vm = None
@@ -1072,7 +1650,9 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
             mapped_vg = disk_uuid_to_vg[nfs_file_name]
             vg_resolution_method = "nfs_file_name_uuid"
 
-        if is_to_remove:
+        if is_in_recycle_bin:
+            mapped_entity = "Recycle Bin"
+        elif is_to_remove:
             mapped_entity = "Pending Deletion (to_remove)"
         elif is_snapshot:
             mapped_entity = "Snapshots"
@@ -1096,6 +1676,7 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
             "value": exclusive_bytes if exclusive_bytes > 0 else NOMINAL_LAYOUT_BYTES,
             "real_bytes": exclusive_bytes,
             "formatted_size": format_bytes(exclusive_bytes),
+            "is_in_recycle_bin": is_in_recycle_bin,
             "mapped_vm_name": mapped_vm,
             "mapped_vg_name": mapped_vg,
             "mapped_entity_name": mapped_entity,
