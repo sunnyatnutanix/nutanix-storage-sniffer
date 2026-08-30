@@ -198,6 +198,24 @@ def parse_curator_chain_usage(chain_log: str) -> dict:
     return chain_usage
 
 def parse_ncli_vms(ncli_vm_log: str) -> dict:
+    def _extract_vm_vdisk_ids(vdisk_entry: str):
+        ids = []
+        if not vdisk_entry:
+            return ids
+        for token in [t.strip() for t in vdisk_entry.split(",") if t.strip()]:
+            parts = token.split("::")
+            if not parts:
+                continue
+            tail = parts[-1].strip()
+            if tail.isdigit():
+                ids.append(tail)
+                continue
+            # Pattern: NFS:2:0:270 -> vdisk id is final field
+            nfs_parts = tail.split(":")
+            if nfs_parts and nfs_parts[-1].strip().isdigit():
+                ids.append(nfs_parts[-1].strip())
+        return ids
+
     vms = {}
     blocks = ncli_vm_log.split("Id                        :")
     for b in blocks[1:]:
@@ -211,11 +229,13 @@ def parse_ncli_vms(ncli_vm_log: str) -> dict:
             vm_name = name_match.group(1).strip()
             vdisks_raw = vdisks_match.group(1).strip() if vdisks_match else ""
             vdisk_list = [v.strip() for v in vdisks_raw.split(",") if v.strip()]
+            vm_vdisk_ids = _extract_vm_vdisk_ids(vdisks_raw)
 
             vm_entry = {
                 "uuid": vm_uuid,
                 "name": vm_name,
-                "vdisks": vdisk_list
+                "vdisks": vdisk_list,
+                "vdisk_ids": vm_vdisk_ids,
             }
             vms[vm_uuid] = vm_entry
             if vm_id_match:
