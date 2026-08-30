@@ -1,6 +1,6 @@
 # Nutanix Storage Sniffer
 
-Nutanix Storage Sniffer is a FastAPI + static web UI tool to analyze CVM storage data and visualize VDisk usage, chain relationships, and shared storage overhead.
+Nutanix Storage Sniffer is a FastAPI + static web UI tool to analyze Nutanix storage Pool data and visualize VDisk usage, chain relationships, and shared storage reference.
 
 ## Features
 
@@ -45,7 +45,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 ## Usage
 
-1. Open the web UI.
+1. Open the web UI http://ipaddress:8000.
 2. Choose **Live CVM** or **Offline Mode**.
 3. Run analysis to load the storage tree.
 4. Use treemap selection, inspector, search, and legend filters to investigate usage and shared storage behavior.
