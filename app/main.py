@@ -1052,6 +1052,18 @@ def process_container_chain_graph_logs(sections: dict):
         if has_children:
             return "root"
         return "leaf"
+
+    def lineage_depth_from_root(vdisk_id: str):
+        cur = str(vdisk_id or "")
+        if not cur:
+            return 0
+        depth = 0
+        seen = set()
+        while cur and cur in parent_by_child and cur not in seen:
+            seen.add(cur)
+            cur = str(parent_by_child.get(cur) or "")
+            depth += 1
+        return depth
     containers = parse_ncli_containers_detailed(sections.get("===NCLI_CTR_START===", ""))
     vms = parse_ncli_vms(sections.get("===NCLI_VM_START===", ""))
     vgs = parse_ncli_volume_groups(sections.get("===NCLI_VG_START===", ""))
@@ -1089,8 +1101,8 @@ def process_container_chain_graph_logs(sections: dict):
             if vid not in chain_to_vdisk_ids[cid]:
                 chain_to_vdisk_ids[cid].append(vid)
 
-    chain_nodes = {}
-    for chain_id, chain_vdisk_ids in chain_to_vdisk_ids.items():
+    def compute_chain_shared_usage(chain_id: str, chain_vdisk_ids: list):
+        """Compute shared usage for one chain. Caller applies family-level preconditions."""
         stats = chain_usage_map.get(chain_id, {})
         logical_live = int(stats.get("logical_live", 0) or 0)
         logical_clone = int(stats.get("logical_shared_clone", 0) or 0)
@@ -1106,21 +1118,39 @@ def process_container_chain_graph_logs(sections: dict):
         else:
             shared_bytes = (logical_live * 2) + physical_peg - exclusive_sum
             source = "snapshot_chain_live2_peg_minus_exclusive_sum"
+        return {
+            "logical_live": logical_live,
+            "logical_shared_clone": logical_clone,
+            "logical_exclusive_snapshot": logical_exclusive_snapshot,
+            "physical_peg": physical_peg,
+            "exclusive_sum": exclusive_sum,
+            "shared_bytes": int(max(0, shared_bytes)),
+            "source": source,
+        }
+
+    def chain_tree_family_all_to_remove(member_chain_ids: list) -> bool:
+        """True only when the chain-tree family has vdisks and every one is to_remove."""
+        family_vids = []
+        for cid in member_chain_ids:
+            family_vids.extend(chain_nodes.get(cid, ChainNode(chain_id=cid)).vdisk_ids)
+        if not family_vids:
+            return False
+        return all(bool(vdisk_by_id.get(str(vid), {}).get("to_remove", False)) for vid in family_vids)
+
+    # Build chain nodes first; shared usage is filled after chain-tree family checks.
+    chain_nodes = {}
+    for chain_id, chain_vdisk_ids in chain_to_vdisk_ids.items():
+        stats = chain_usage_map.get(chain_id, {})
         chain_nodes[chain_id] = ChainNode(
             chain_id=chain_id,
             vdisk_ids=list(chain_vdisk_ids),
-            logical_live=logical_live,
-            logical_shared_clone=logical_clone,
-            logical_exclusive_snapshot=logical_exclusive_snapshot,
-            physical_peg=physical_peg,
-            shared_bytes=int(max(0, shared_bytes)),
-            shared_formula_source=source,
-            shared_formula_terms={
-                "logical_live": logical_live,
-                "logical_shared_clone": logical_clone,
-                "physical_peg": physical_peg,
-                "exclusive_sum": exclusive_sum,
-            },
+            logical_live=int(stats.get("logical_live", 0) or 0),
+            logical_shared_clone=int(stats.get("logical_shared_clone", 0) or 0),
+            logical_exclusive_snapshot=int(stats.get("logical_exclusive_snapshot", 0) or 0),
+            physical_peg=int(stats.get("physical_peg", 0) or 0),
+            shared_bytes=0,
+            shared_formula_source="pending_family_precondition",
+            shared_formula_terms={},
         )
 
     # Build chain graph edges.
@@ -1217,6 +1247,50 @@ def process_container_chain_graph_logs(sections: dict):
             members.append(cid)
             stack.extend(sorted(chain_nodes[cid].child_chain_ids))
         leaves = [cid for cid in members if len([c for c in chain_nodes[cid].child_chain_ids if c in members]) == 0]
+
+        # Precondition: if every vdisk in this chain-tree family is to_remove,
+        # skip shared-usage calculation and move to the next family.
+        if chain_tree_family_all_to_remove(members):
+            for cid in members:
+                node = chain_nodes[cid]
+                node.shared_bytes = 0
+                node.shared_formula_source = "skipped_all_family_to_remove"
+                node.shared_formula_terms = {
+                    "logical_live": int(node.logical_live or 0),
+                    "logical_shared_clone": int(node.logical_shared_clone or 0),
+                    "physical_peg": int(node.physical_peg or 0),
+                    "exclusive_sum": 0,
+                }
+            chain_trees.append(
+                ChainTree(
+                    chain_tree_id=f"chain-tree-{root_chain_id}",
+                    root_chain_id=root_chain_id,
+                    member_chain_ids=sorted(members),
+                    leaf_chain_ids=sorted(leaves),
+                    selected_shared_chain_id=None,
+                    selected_shared_bytes=0,
+                    leaf_candidates=[],
+                )
+            )
+            continue
+
+        # At least one vdisk in the family is not to_remove: calculate shared usage.
+        for cid in members:
+            node = chain_nodes[cid]
+            computed = compute_chain_shared_usage(cid, list(node.vdisk_ids))
+            node.logical_live = int(computed["logical_live"])
+            node.logical_shared_clone = int(computed["logical_shared_clone"])
+            node.logical_exclusive_snapshot = int(computed["logical_exclusive_snapshot"])
+            node.physical_peg = int(computed["physical_peg"])
+            node.shared_bytes = int(computed["shared_bytes"])
+            node.shared_formula_source = computed["source"]
+            node.shared_formula_terms = {
+                "logical_live": int(computed["logical_live"]),
+                "logical_shared_clone": int(computed["logical_shared_clone"]),
+                "physical_peg": int(computed["physical_peg"]),
+                "exclusive_sum": int(computed["exclusive_sum"]),
+            }
+
         leaf_candidates = [{"chain_id": cid, "shared_bytes": int(chain_nodes[cid].shared_bytes)} for cid in leaves]
         selected = max(leaf_candidates, key=lambda x: x["shared_bytes"]) if leaf_candidates else {"chain_id": None, "shared_bytes": 0}
         chain_trees.append(
@@ -1308,6 +1382,7 @@ def process_container_chain_graph_logs(sections: dict):
                     "lineage_summary": {
                         "current_vdisk_id": str(vnode.vdisk_id),
                         "lineage_root_vdisk_id": lineage_root(vnode.vdisk_id),
+                        "depth_from_root": lineage_depth_from_root(vnode.vdisk_id),
                         "parent_vdisk_id": vnode.parent_vdisk_id,
                         "children_vdisk_ids": sorted(list(vnode.children_vdisk_ids), key=lambda x: int(x) if str(x).isdigit() else str(x)),
                         "lineage_role": lineage_role(vnode.vdisk_id),
@@ -1331,6 +1406,7 @@ def process_container_chain_graph_logs(sections: dict):
             })
 
         shared_storage_nodes = []
+        shared_by_family_key = {}
         for tree in cg.chain_trees:
             selected_chain_id = tree.selected_shared_chain_id
             if not selected_chain_id:
@@ -1338,10 +1414,32 @@ def process_container_chain_graph_logs(sections: dict):
             selected_chain = chain_nodes.get(selected_chain_id)
             if not selected_chain or selected_chain.shared_bytes <= 0:
                 continue
-            shared_storage_nodes.append({
-                "name": f"Root VDisk-Chain-{selected_chain_id}",
+
+            # lineage_id is the unique shared-storage identifier / highlight key.
+            lineage_id = None
+            for cid in (tree.member_chain_ids or []):
+                for vid in chain_nodes.get(cid, ChainNode(chain_id=cid)).vdisk_ids:
+                    vd = vdisk_by_id.get(str(vid), {})
+                    lid = str(vd.get("lineage_id") or "").strip()
+                    if lid:
+                        lineage_id = lid
+                        break
+                if lineage_id:
+                    break
+            if not lineage_id:
+                lineage_id = str(selected_chain_id)
+
+            shared_clone_usage = int(
+                (selected_chain.shared_formula_terms or {}).get("logical_shared_clone", 0)
+                or selected_chain.logical_shared_clone
+                or 0
+            )
+            candidate = {
+                "name": lineage_id,
                 # Synthetic aggregate node: do not reuse a real vdisk_id.
                 "vdisk_id": None,
+                "lineage_id": lineage_id,
+                "shared_clone_usage_bytes": shared_clone_usage,
                 "chain_id": selected_chain_id,
                 "root_chain_id": tree.root_chain_id,
                 "chain_tree_id": tree.chain_tree_id,
@@ -1361,7 +1459,23 @@ def process_container_chain_graph_logs(sections: dict):
                 "display_source": selected_chain.shared_formula_source,
                 "formatted_size": format_bytes(int(tree.selected_shared_bytes)),
                 "container_name": cg.container_name,
-            })
+            }
+
+            # Same lineage_id: keep max shared-clone usage.
+            existing = shared_by_family_key.get(lineage_id)
+            if existing is None:
+                shared_by_family_key[lineage_id] = candidate
+            else:
+                existing_clone = int(existing.get("shared_clone_usage_bytes", 0) or 0)
+                existing_shared = int(existing.get("selected_shared_bytes", 0) or 0)
+                cand_shared = int(candidate.get("selected_shared_bytes", 0) or 0)
+                if (
+                    shared_clone_usage > existing_clone
+                    or (shared_clone_usage == existing_clone and cand_shared > existing_shared)
+                ):
+                    shared_by_family_key[lineage_id] = candidate
+
+        shared_storage_nodes = list(shared_by_family_key.values())
         shared_storage_nodes.sort(key=lambda x: int(x.get("real_bytes", 0) or 0), reverse=True)
         shared_total = sum(int(n.get("real_bytes", 0) or 0) for n in shared_storage_nodes)
         if shared_storage_nodes:

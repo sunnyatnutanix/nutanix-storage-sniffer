@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>VDisk Sniffer - Nutanix Storage Analyzer</title>
+    <title>Nutanix Storage Sniffer</title>
+    <link rel="icon" type="image/png" href="/static/favicon-nutanix.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
@@ -86,7 +87,7 @@
         }
     </style>
 </head>
-<body class="bg-slate-900 text-slate-100 flex flex-col h-screen overflow-hidden">
+<body class="bg-slate-900 text-slate-300 flex flex-col h-screen overflow-hidden">
 
     <!-- Search Overlay Modal -->
     <div id="search-modal" onclick="closeSearchModal(event)" class="fixed inset-0 bg-slate-950/55 backdrop-blur-xs hidden z-[80] flex items-center justify-center p-4 transition-opacity duration-200">
@@ -103,12 +104,12 @@
 
             <div class="relative">
                 <input type="text" id="search-input" oninput="onSearchInput()" onkeydown="onSearchKeyDown(event)" placeholder="Search VDisk ID, Parent VDisk ID, Chain ID (e.g. Chain ID: uuid), VDisk Name, NFS File..."
-                       class="w-full bg-slate-950 border border-slate-700 focus:border-sky-500 rounded-lg px-4 py-3 text-sm text-slate-100 focus:outline-none font-mono">
+                       class="w-full bg-slate-950 border border-slate-700 focus:border-sky-500 rounded-lg px-4 py-3 text-sm text-slate-300 focus:outline-none font-mono">
                 <button onclick="clearSearch()" id="search-clear-btn" class="hidden absolute right-3 top-3 text-slate-400 hover:text-white text-xs font-mono bg-slate-800 px-2 py-1 rounded">Clear</button>
             </div>
 
             <div class="text-[11px] text-slate-400 space-y-1">
-                <p>Matches: <b class="text-slate-200">VDisk ID, Parent VDisk ID, Chain ID (e.g. Chain ID: b49cea6d-...), VDisk UUID, VDisk Name, NFS File Name, Container, VM Name, VG Name</b></p>
+                <p>Matches: <b class="text-slate-200">VDisk ID, Parent VDisk ID, Chain ID, VDisk UUID, VDisk Name, NFS File Name, Container, VM Name, VG Name</b></p>
                 <p id="search-stats" class="text-sky-400 font-mono"></p>
             </div>
         </div>
@@ -159,10 +160,6 @@
                     <input type="color" id="picker-thickProv" onchange="updateColorFromPicker('thickProv', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
-                    <span class="text-slate-300 font-medium">Standard VDisks</span>
-                    <input type="color" id="picker-vdisk" onchange="updateColorFromPicker('vdisk', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
-                </div>
-                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
                     <span class="text-slate-300 font-medium">Active Chain Highlight</span>
                     <input type="color" id="picker-activeChain" onchange="updateColorFromPicker('activeChain', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
@@ -175,8 +172,67 @@
         </div>
     </div>
 
+    <!-- Treemap Text Style Legend Modal (OneClickKB-style presets) -->
+    <div id="text-style-modal" onclick="closeTextStyleModal(event)" class="fixed inset-0 bg-slate-950/55 backdrop-blur-lg hidden z-[85] flex items-center justify-center p-4 transition-opacity duration-200">
+        <div onclick="event.stopPropagation()" class="bg-slate-900 border border-sky-500/50 rounded-xl p-6 w-full max-w-lg shadow-2xl space-y-4 relative">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+                <div class="flex items-center space-x-2 text-sky-400 font-bold text-base">
+                    <span>Aa</span>
+                    <span>Treemap Text Style</span>
+                </div>
+                <button onclick="closeTextStyleModal()" class="text-slate-400 hover:text-white font-bold text-sm">✕</button>
+            </div>
+
+            <p class="text-[11px] text-slate-400">Choose a label style (OneClickKB-style white on color is the default). Changes apply live and save for next visit.</p>
+
+            <div class="grid grid-cols-1 gap-2 text-xs" id="text-style-preset-list">
+                <!-- filled by JS -->
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 text-xs pt-1">
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Label Color</span>
+                    <input type="color" id="picker-text-fill" onchange="updateTextStyleFromControls()" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Outline</span>
+                    <label class="inline-flex items-center gap-2 text-slate-300">
+                        <input type="checkbox" id="picker-text-outline" onchange="updateTextStyleFromControls()" class="rounded border-slate-600">
+                        <span>On</span>
+                    </label>
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800 col-span-2">
+                    <span class="text-slate-300 font-medium">Text Size</span>
+                    <input type="range" id="picker-text-scale" min="80" max="140" step="5" value="100" oninput="updateTextStyleFromControls()" class="w-40 accent-sky-500">
+                    <span id="picker-text-scale-label" class="font-mono text-slate-400 w-10 text-right">100%</span>
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800 col-span-2">
+                    <span class="text-slate-300 font-medium">Dark Header Bar</span>
+                    <label class="inline-flex items-center gap-2 text-slate-300">
+                        <input type="checkbox" id="picker-text-header-bar" onchange="updateTextStyleFromControls()" class="rounded border-slate-600">
+                        <span>Show on group labels</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="rounded-lg border border-slate-700 overflow-hidden">
+                <div class="px-3 py-1.5 bg-slate-950 text-[10px] text-slate-500 uppercase tracking-wide">Preview</div>
+                <div id="text-style-preview" class="grid grid-cols-3 gap-0 text-center text-[11px] font-bold">
+                    <div class="py-4 px-2" style="background:#1e3a8a;color:#fff">VM Label</div>
+                    <div class="py-4 px-2" style="background:#166534;color:#fff">Shared Storage</div>
+                    <div class="py-4 px-2" style="background:#881337;color:#fff">182.67 GiB</div>
+                </div>
+            </div>
+
+            <div class="flex justify-between items-center pt-3 border-t border-slate-800 text-xs">
+                <button onclick="resetDefaultTextStyle()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-semibold transition">Reset Defaults</button>
+                <button onclick="closeTextStyleModal()" class="px-4 py-1.5 bg-sky-500 hover:bg-sky-600 text-white rounded font-bold transition">Apply & Save</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Floating Cursor Tooltip -->
-    <div id="floating-tooltip" class="fixed hidden bg-slate-900/95 border border-sky-500 text-white text-xs px-3 py-2 rounded-lg shadow-2xl pointer-events-none z-[9999] backdrop-blur-sm transition-opacity duration-75"></div>
+    <div id="floating-tooltip" class="fixed hidden bg-slate-900/95 border border-sky-500 text-slate-300 text-xs px-3 py-2 rounded-lg shadow-2xl pointer-events-none z-[9999] backdrop-blur-sm transition-opacity duration-75"></div>
 
     <!-- Hidden Offline Log Analysis Panel -->
     <div id="offline-analysis-panel" class="fixed inset-0 h-screen bg-slate-950 border-t-2 border-emerald-500 shadow-2xl z-[70] transform translate-y-full transition-transform duration-300 ease-out flex flex-col">
@@ -204,8 +260,8 @@
     </div>
 
     <!-- Top Connection Header -->
-    <header class="bg-slate-800 border-b border-slate-700 px-6 py-3 flex flex-wrap justify-between items-center gap-4 flex-shrink-0 z-20">
-        <div class="flex items-center space-x-3">
+    <header class="bg-slate-800 border-b border-slate-700 px-6 py-3 flex flex-nowrap justify-between items-center gap-4 flex-shrink-0 z-20 overflow-x-auto">
+        <div class="flex items-center space-x-3 flex-shrink-0">
             <button id="sidebar-toggle-btn" onclick="toggleSidebar()" title="Toggle Sidebar"
                     class="p-1.5 bg-slate-700 hover:bg-sky-600 rounded text-slate-200 transition focus:outline-none flex items-center justify-center">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -214,21 +270,9 @@
             </button>
             <h1 class="text-xl font-bold text-sky-400">Nutanix Storage Sniffer</h1>
 
-            <!-- Quick Search Button Trigger -->
-            <button onclick="openSearchModal()" title="Press / to search"
-                    class="px-2.5 py-1 bg-slate-900 border border-slate-700 hover:border-sky-500 rounded text-xs text-slate-300 hover:text-white transition flex items-center space-x-1.5">
-                <span>🔍 Search</span>
-                <kbd class="text-[10px] bg-slate-800 border border-slate-600 px-1 rounded text-slate-400 font-mono">/</kbd>
-            </button>
-
-            <!-- Search Active Filter Badge -->
-            <div id="search-filter-badge" class="hidden text-xs bg-sky-950 border border-sky-500/60 px-2.5 py-1 rounded-full text-sky-300 flex items-center space-x-1.5">
-                <span>Filter: <b id="search-query-text" class="font-mono text-white"></b></span>
-                <button onclick="clearSearch()" class="text-slate-400 hover:text-white font-bold text-sm leading-none ml-1">×</button>
-            </div>
         </div>
 
-        <div class="flex items-center space-x-3">
+        <div class="flex items-center space-x-3 flex-shrink-0">
             <div class="bg-slate-900 p-1 rounded border border-slate-700 flex text-xs">
                 <button id="mode-ssh-btn" onclick="switchMode('ssh')" class="px-3 py-1 rounded bg-sky-500 text-white font-semibold transition">🚀 Live CVM</button>
                 <button id="mode-file-btn" onclick="switchMode('file')" class="px-3 py-1 rounded text-slate-400 hover:text-white transition">📂 Offline Mode</button>
@@ -298,10 +342,11 @@
                             </button>
                             <div id="legend-filter-menu" class="hidden fixed z-[75] bg-slate-900/90 backdrop-blur-md border border-slate-700 rounded shadow-2xl min-w-[280px] p-2 overflow-y-auto"></div>
                         </div>
+                        <button onclick="openTextStyleModal()" class="text-[10px] bg-slate-700 hover:bg-sky-600 text-slate-200 px-2 py-0.5 rounded transition flex-shrink-0 font-bold" title="Treemap text style">Aa</button>
                         <button onclick="openColorModal()" class="text-[10px] bg-slate-700 hover:bg-amber-600 text-slate-200 px-2 py-0.5 rounded transition flex-shrink-0" title="Customize palette">🎨</button>
                     </div>
                 </div>
-                <span class="block text-[10px] text-slate-500 text-center">Use dropdown to highlight</span>
+                <span class="block text-[10px] text-slate-500 text-center">Filter · Text · Colors</span>
             </div>
         </div>
 
@@ -312,9 +357,17 @@
 
         <!-- Right Main Treemap Canvas Container -->
         <div class="flex-1 flex flex-col p-4 bg-slate-950 overflow-hidden min-w-0" id="treemap-container">
-            <div id="breadcrumbs" class="flex items-center space-x-2 text-xs font-mono bg-slate-900 border border-slate-700 px-3 py-2 rounded mb-3 text-slate-300 overflow-x-auto flex-shrink-0 w-full">
-                <span class="text-slate-500">Path:</span>
-                <span id="breadcrumb-trail" class="flex items-center space-x-1"></span>
+            <div id="breadcrumbs" class="flex items-center gap-2 text-xs font-mono bg-slate-900 border border-slate-700 px-3 py-2 rounded mb-3 text-slate-300 flex-shrink-0 w-full min-w-0">
+                <button id="breadcrumb-mode-toggle" onclick="toggleBreadcrumbMode()" class="text-[10px] px-2 py-0.5 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 flex-shrink-0" title="Toggle path/keyword display">Path</button>
+                <div class="min-w-0 flex-1 overflow-x-auto whitespace-nowrap">
+                    <span id="breadcrumb-trail" class="inline-flex items-center space-x-1"></span>
+                    <span id="breadcrumb-keyword" class="hidden text-sky-300"></span>
+                </div>
+                <button id="breadcrumb-keyword-clear" onclick="clearSearch()" class="hidden text-slate-400 hover:text-white font-bold text-sm leading-none ml-1 flex-shrink-0" title="Clear search filter">×</button>
+                <button id="breadcrumb-search-btn" onclick="openSearchModal()" class="px-2 py-0.5 bg-slate-800 border border-slate-700 hover:border-sky-500 rounded text-[10px] text-slate-300 hover:text-white transition flex items-center space-x-1.5 flex-shrink-0" title="Press / to search">
+                    <span>🔍 Search</span>
+                    <kbd class="text-[10px] bg-slate-700 border border-slate-600 px-1 rounded text-slate-400 font-mono">/</kbd>
+                </button>
             </div>
 
             <div class="flex-1 relative overflow-hidden w-full" id="canvas-wrapper">
@@ -340,10 +393,12 @@
         let activeChainId = null;
         let activeChainVDiskIds = new Set();
         let activeMemberChainIds = new Set();
+        let activeLineageId = null;
         let lineageNodeByVdiskId = new Map();
         let lineageParentByChild = new Map();
         let lineageChildrenByParent = new Map();
         let chainTreeVDiskIdsByChainId = new Map();
+        let vdiskIdsByLineageId = new Map();
         let isAdvancedPropertiesOpen = false; // Persistent state for the dropdown
         let selectedNodeSignature = null;
         
@@ -355,6 +410,7 @@
         let loadedOfflineSections = [];
         let offlineTableState = null;
         let activeOfflineSectionIndex = 0;
+        let breadcrumbMode = "path";
 
         function copyOfflineCommand() {
             const btn = document.getElementById("copy-script-btn");
@@ -729,6 +785,57 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         let themeColors = { ...defaultThemeColors };
 
+        const textStylePresets = {
+            oneclickkb: {
+                id: "oneclickkb",
+                label: "OneClickKB White",
+                hint: "Bold white on color",
+                fill: "#ffffff",
+                stroke: "rgba(0,0,0,0.45)",
+                strokeWidth: 2.5,
+                outline: false,
+                headerBar: false,
+                scale: 100,
+                sampleBg: "#5b21b6",
+            },
+            softGrey: {
+                id: "softGrey",
+                label: "Soft Grey",
+                hint: "Light grey labels",
+                fill: "#d1d5db",
+                stroke: "rgba(0,0,0,0.55)",
+                strokeWidth: 2.5,
+                outline: false,
+                headerBar: false,
+                scale: 100,
+                sampleBg: "#166534",
+            },
+            darkOutline: {
+                id: "darkOutline",
+                label: "Dark + Halo",
+                hint: "Best on bright greens",
+                fill: "#4b5563",
+                stroke: "rgba(255,255,255,0.92)",
+                strokeWidth: 3,
+                outline: true,
+                headerBar: true,
+                scale: 100,
+                sampleBg: "#1e3a8a",
+            },
+        };
+
+        const defaultTextStyle = {
+            preset: "oneclickkb",
+            fill: textStylePresets.oneclickkb.fill,
+            stroke: textStylePresets.oneclickkb.stroke,
+            strokeWidth: textStylePresets.oneclickkb.strokeWidth,
+            outline: textStylePresets.oneclickkb.outline,
+            headerBar: textStylePresets.oneclickkb.headerBar,
+            scale: textStylePresets.oneclickkb.scale,
+        };
+
+        let themeTextStyle = { ...defaultTextStyle };
+
         function loadThemeColors() {
             try {
                 const saved = localStorage.getItem("vdisk_sniffer_colors");
@@ -737,6 +844,141 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 themeColors = { ...defaultThemeColors };
             }
             updateColorSwatches();
+        }
+
+        function loadThemeTextStyle() {
+            try {
+                const saved = localStorage.getItem("vdisk_sniffer_text_style");
+                if (saved) themeTextStyle = { ...defaultTextStyle, ...JSON.parse(saved) };
+            } catch (e) {
+                themeTextStyle = { ...defaultTextStyle };
+            }
+            syncTextStyleControls();
+            renderTextStyleLegend();
+            renderTextStylePresetList();
+            updateTextStylePreview();
+        }
+
+        function saveThemeTextStyle() {
+            try { localStorage.setItem("vdisk_sniffer_text_style", JSON.stringify(themeTextStyle)); } catch (e) {}
+            syncTextStyleControls();
+            renderTextStyleLegend();
+            renderTextStylePresetList();
+            updateTextStylePreview();
+        }
+
+        function applyTextStylePreset(presetId, redraw = true) {
+            const preset = textStylePresets[presetId];
+            if (!preset) return;
+            themeTextStyle = {
+                preset: preset.id,
+                fill: preset.fill,
+                stroke: preset.stroke,
+                strokeWidth: preset.strokeWidth,
+                outline: preset.outline,
+                headerBar: preset.headerBar,
+                scale: preset.scale,
+            };
+            saveThemeTextStyle();
+            if (redraw) drawCanvasState();
+        }
+
+        function openTextStyleModal() {
+            const modal = document.getElementById("text-style-modal");
+            if (!modal) return;
+            modal.classList.remove("hidden");
+            syncTextStyleControls();
+            renderTextStylePresetList();
+            updateTextStylePreview();
+        }
+
+        function closeTextStyleModal(event) {
+            if (event && event.target && event.target !== event.currentTarget) return;
+            const modal = document.getElementById("text-style-modal");
+            if (modal) modal.classList.add("hidden");
+        }
+
+        function syncTextStyleControls() {
+            const fill = document.getElementById("picker-text-fill");
+            const outline = document.getElementById("picker-text-outline");
+            const headerBar = document.getElementById("picker-text-header-bar");
+            const scale = document.getElementById("picker-text-scale");
+            const scaleLabel = document.getElementById("picker-text-scale-label");
+            if (fill) fill.value = themeTextStyle.fill || "#ffffff";
+            if (outline) outline.checked = !!themeTextStyle.outline;
+            if (headerBar) headerBar.checked = !!themeTextStyle.headerBar;
+            if (scale) scale.value = String(themeTextStyle.scale || 100);
+            if (scaleLabel) scaleLabel.textContent = `${themeTextStyle.scale || 100}%`;
+        }
+
+        function updateTextStyleFromControls() {
+            const fill = document.getElementById("picker-text-fill");
+            const outline = document.getElementById("picker-text-outline");
+            const headerBar = document.getElementById("picker-text-header-bar");
+            const scale = document.getElementById("picker-text-scale");
+            themeTextStyle.preset = "custom";
+            if (fill) themeTextStyle.fill = fill.value;
+            if (outline) themeTextStyle.outline = !!outline.checked;
+            if (headerBar) themeTextStyle.headerBar = !!headerBar.checked;
+            if (scale) themeTextStyle.scale = Number(scale.value) || 100;
+            saveThemeTextStyle();
+            drawCanvasState();
+        }
+
+        function resetDefaultTextStyle() {
+            themeTextStyle = { ...defaultTextStyle };
+            saveThemeTextStyle();
+            drawCanvasState();
+        }
+
+        function renderTextStyleLegend() {
+            // Sidebar preset chips removed; presets remain available in the Aa modal.
+        }
+
+        function renderTextStylePresetList() {
+            const el = document.getElementById("text-style-preset-list");
+            if (!el) return;
+            el.innerHTML = Object.values(textStylePresets).map((preset) => {
+                const active = themeTextStyle.preset === preset.id;
+                return `<button type="button" onclick="applyTextStylePreset('${preset.id}')"
+                    class="w-full text-left px-3 py-2 rounded border flex items-center gap-3 ${active ? 'border-sky-400 bg-slate-800' : 'border-slate-800 bg-slate-950/60 hover:bg-slate-800/80'}">
+                    <span class="inline-flex items-center justify-center w-16 h-8 rounded text-[10px] font-bold flex-shrink-0"
+                        style="background:${preset.sampleBg};color:${preset.fill}">Aa</span>
+                    <span class="min-w-0">
+                        <span class="block text-slate-200 font-semibold">${preset.label}</span>
+                        <span class="block text-slate-500">${preset.hint}</span>
+                    </span>
+                    ${active ? '<span class="ml-auto text-sky-400 text-[10px] font-bold">ACTIVE</span>' : ''}
+                </button>`;
+            }).join("");
+        }
+
+        function updateTextStylePreview() {
+            const preview = document.getElementById("text-style-preview");
+            if (!preview) return;
+            const fill = themeTextStyle.fill || "#ffffff";
+            const shadow = themeTextStyle.outline ? "0 0 3px rgba(0,0,0,0.85)" : "none";
+            preview.querySelectorAll("div").forEach((cell) => {
+                cell.style.color = fill;
+                cell.style.textShadow = shadow;
+                cell.style.fontSize = `${11 * ((themeTextStyle.scale || 100) / 100)}px`;
+            });
+        }
+
+        function drawTreemapLabel(ctx, text, x, y, opts = {}) {
+            const fill = opts.fill || themeTextStyle.fill || "#ffffff";
+            const useOutline = opts.outline !== undefined ? opts.outline : !!themeTextStyle.outline;
+            const stroke = opts.stroke || themeTextStyle.stroke || "rgba(0,0,0,0.45)";
+            const lineWidth = opts.strokeWidth || themeTextStyle.strokeWidth || 2.5;
+            if (useOutline) {
+                ctx.lineJoin = "round";
+                ctx.miterLimit = 2;
+                ctx.lineWidth = lineWidth;
+                ctx.strokeStyle = stroke;
+                ctx.strokeText(text, x, y);
+            }
+            ctx.fillStyle = fill;
+            ctx.fillText(text, x, y);
         }
 
         function saveThemeColors() {
@@ -852,7 +1094,6 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 { key: "sharedClone", label: "Shared VDisks" },
                 { key: "explicitReserve", label: "Reserved Available Space" },
                 { key: "thickProv", label: "Thick Provisioned" },
-                { key: "vdisk", label: "Standard VDisks" },
                 { key: "activeChain", label: "Active Chain" },
             ];
             menu.innerHTML = items.map(({ key, label }) => {
@@ -875,9 +1116,9 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 sharedClone: "Shared VDisks",
                 explicitReserve: "Reserved Available Space",
                 thickProv: "Thick Provisioned",
-                vdisk: "Standard VDisks",
                 activeChain: "Active Chain",
             };
+            if (activeLegendFilter === "vdisk") activeLegendFilter = null;
             const activeColor = activeLegendFilter ? (themeColors[activeLegendFilter] || "#cbd5e1") : "#cbd5e1";
             const btn = document.getElementById("legend-filter-button");
             const label = document.getElementById("legend-filter-label");
@@ -898,12 +1139,43 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             positionLegendFilterMenu();
         }
 
+        function resolveNodeLineageId(info) {
+            if (!info) return null;
+            const direct = String(info.lineage_id || "").trim();
+            if (direct) return direct;
+            // Shared storage blocks are named by lineage_id.
+            if (info.is_shared_parent_vdisk) {
+                const byName = String(info.name || "").trim();
+                if (byName) return byName;
+            }
+            return null;
+        }
+
+        function formatOriginatingClusterLabel(info) {
+            const ocid = String((info && info.originating_cluster_id) || "").trim();
+            if (!ocid) return { scope: "local", label: "Local", detail: "local" };
+            return { scope: "remote", label: "Remote", detail: ocid };
+        }
+
+        function isActiveLineageHighlight(data) {
+            if (!data) return false;
+            if (activeLineageId) {
+                const lid = resolveNodeLineageId(data);
+                if (lid && lid === String(activeLineageId)) return true;
+            }
+            if (data.vdisk_id !== undefined && data.vdisk_id !== null && activeChainVDiskIds.has(String(data.vdisk_id))) {
+                return true;
+            }
+            return false;
+        }
+
         function getMappedEntityCategory(data) {
+            if (data && (data.is_shared_parent_vdisk || data.is_shared_clone_block)) return "sharedClone";
             const mapped = String((data && data.mapped_entity_name) || data.name || "");
             if (mapped.startsWith("VM:")) return "vm";
             if (mapped.startsWith("VG:")) return "vg";
             if (mapped === "Snapshots") return "snapshots";
-            if (mapped === "Shared Storage" || mapped.startsWith("Root VDisk-Chain-")) return "sharedClone";
+            if (mapped === "Shared Storage" || mapped.startsWith("Root VDisk-Chain-") || mapped.startsWith("Lineage ")) return "sharedClone";
             if (mapped === "Reserved Available Space") return "explicitReserve";
             if (mapped === "Recycle Bin") return "recycleBin";
             if (mapped.includes("Pending Deletion") || mapped.includes("to_remove")) return "pendingDeletion";
@@ -913,12 +1185,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         function getLegendCategory(d) {
             const data = d.data;
-            if (data.vdisk_id && activeChainVDiskIds.has(String(data.vdisk_id))) return 'activeChain';
-            if (data.is_shared_parent_vdisk) {
-                const chainMatch = activeChainId && String(data.selected_shared_chain_id || data.chain_id || "") === String(activeChainId);
-                const leafMatch = Array.isArray(data.leaf_candidates) && activeChainId && data.leaf_candidates.some(r => String(r.chain_id || "") === String(activeChainId));
-                if (chainMatch || leafMatch) return 'activeChain';
-            }
+            if (isActiveLineageHighlight(data)) return 'activeChain';
             if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return 'sharedClone';
             if (data.is_explicit_reserve_block || data.name === "Reserved Available Space") return 'explicitReserve';
             if (data.is_thick_prov_vdisk || data.is_thick_prov_block || data.name === "Thick Provisioned") return 'thickProv';
@@ -953,12 +1220,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         }
 
         function getEntityColor(data) {
-            if (data.vdisk_id && activeChainVDiskIds.has(String(data.vdisk_id))) return themeColors.activeChain;
-            if (data.is_shared_parent_vdisk) {
-                const chainMatch = activeChainId && String(data.selected_shared_chain_id || data.chain_id || "") === String(activeChainId);
-                const leafMatch = Array.isArray(data.leaf_candidates) && activeChainId && data.leaf_candidates.some(r => String(r.chain_id || "") === String(activeChainId));
-                if (chainMatch || leafMatch) return themeColors.activeChain;
-            }
+            if (isActiveLineageHighlight(data)) return themeColors.activeChain;
             if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return themeColors.sharedClone;
             if (data.is_explicit_reserve_block || data.name === "Reserved Available Space") return themeColors.explicitReserve;
             if (data.is_thick_prov_vdisk || data.is_thick_prov_block || data.name === "Thick Provisioned") return themeColors.thickProv;
@@ -983,10 +1245,10 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         }
 
         function nodeContainsChainVDisk(d3Node) {
-            if (!d3Node || (activeChainVDiskIds.size === 0 && !activeChainId)) return false;
+            if (!d3Node || (activeChainVDiskIds.size === 0 && !activeChainId && !activeLineageId)) return false;
             let found = false;
             d3Node.each(n => {
-                if (n.data && n.data.vdisk_id && activeChainVDiskIds.has(String(n.data.vdisk_id))) {
+                if (n.data && isActiveLineageHighlight(n.data)) {
                     found = true;
                 }
                 if (n.data && n.data.is_shared_clone_block) {
@@ -994,13 +1256,6 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     const matchesMember = n.data.member_chain_ids && activeChainId && n.data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
                     const matchesActiveMember = n.data.chain_id && activeMemberChainIds.has(String(n.data.chain_id));
                     if (matchesRoot || matchesMember || matchesActiveMember) {
-                        found = true;
-                    }
-                }
-                if (n.data && n.data.is_shared_parent_vdisk) {
-                    const chainMatch = activeChainId && String(n.data.selected_shared_chain_id || n.data.chain_id || "") === String(activeChainId);
-                    const leafMatch = n.data.leaf_candidates && activeChainId && n.data.leaf_candidates.some(r => String(r.chain_id || "") === String(activeChainId));
-                    if (chainMatch || leafMatch) {
                         found = true;
                     }
                 }
@@ -1031,8 +1286,9 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 if (!modalClosed && activeSearchQuery !== "") {
                     clearSearch();
                 } else if (!modalClosed && activeSearchQuery === "") {
-                    if (activeChainId || activeChainVDiskIds.size > 0 || activeMemberChainIds.size > 0) {
+                    if (activeChainId || activeChainVDiskIds.size > 0 || activeMemberChainIds.size > 0 || activeLineageId) {
                         activeChainId = null;
+                        activeLineageId = null;
                         activeChainVDiskIds.clear();
                         activeMemberChainIds.clear();
                         if (currentHierarchyNode) {
@@ -1649,7 +1905,6 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             document.getElementById("search-input").value = "";
             document.getElementById("search-clear-btn").classList.add("hidden");
             activeSearchQuery = "";
-            document.getElementById("search-filter-badge").classList.add("hidden");
             document.getElementById("search-stats").textContent = "";
             applySearchAndRender();
         }
@@ -1719,15 +1974,8 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (!fullRootNode) return;
 
             const query = activeSearchQuery.trim().toLowerCase();
-            const badge = document.getElementById("search-filter-badge");
-            const badgeText = document.getElementById("search-query-text");
-
-            if (query) {
-                badge.classList.remove("hidden");
-                badgeText.textContent = query;
-            } else {
-                badge.classList.add("hidden");
-            }
+            if (query) breadcrumbMode = "keyword";
+            updateBreadcrumbBarDisplay();
 
             let matchCount = 0;
 
@@ -1828,6 +2076,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         window.addEventListener("DOMContentLoaded", () => {
             loadThemeColors();
+            loadThemeTextStyle();
             initSidebarResizer();
             initSidebarVResizer();
             const savedIp = localStorage.getItem("vdisk_sniffer_ip");
@@ -1887,6 +2136,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 currentHierarchyNode = usedSpaceNode || fullRootNode;
 
                 activeChainId = null;
+                activeLineageId = null;
                 activeChainVDiskIds.clear();
                 activeMemberChainIds.clear();
 
@@ -1916,6 +2166,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             currentHierarchyNode = usedSpaceNode || fullRootNode;
 
             activeChainId = null;
+            activeLineageId = null;
             activeChainVDiskIds.clear();
             activeMemberChainIds.clear();
 
@@ -2101,7 +2352,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     </svg>
                 </button>
                 <span class="mr-1.5 text-sm flex-shrink-0">${icon}</span>
-                <span class="name flex-1 truncate text-slate-200 group-hover:text-sky-300 font-medium">${getDisplayNodeName(d3Node.data)}</span>
+                <span class="name flex-1 truncate text-slate-300 group-hover:text-sky-300 font-medium">${getDisplayNodeName(d3Node.data)}</span>
                 <span class="size text-[10px] font-mono text-slate-400 ml-1 flex-shrink-0">${displaySize}</span>
             `;
 
@@ -2179,14 +2430,14 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 if (activeRow) activeRow.classList.add("bg-sky-600/30", "border-sky-500", "text-sky-300", "font-bold");
             }
 
-            if (fullRootNode && (activeChainVDiskIds.size > 0 || activeChainId)) {
+            if (fullRootNode && (activeChainVDiskIds.size > 0 || activeChainId || activeLineageId)) {
                 fullRootNode.each(n => {
-                    const isVDiskInChain = n.data.vdisk_id && activeChainVDiskIds.has(String(n.data.vdisk_id));
+                    const isLineageMember = isActiveLineageHighlight(n.data);
                     const isChainBlockRoot = n.data.is_shared_clone_block && activeChainId && String(n.data.chain_id) === String(activeChainId);
                     const isChainBlockMember = n.data.is_shared_clone_block && n.data.member_chain_ids && activeChainId && n.data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
                     const isChainBlockActiveMember = n.data.is_shared_clone_block && n.data.chain_id && activeMemberChainIds.has(String(n.data.chain_id));
 
-                    if ((isVDiskInChain || isChainBlockRoot || isChainBlockMember || isChainBlockActiveMember) && n.treeRowId) {
+                    if ((isLineageMember || isChainBlockRoot || isChainBlockMember || isChainBlockActiveMember) && n.treeRowId) {
                         const row = document.getElementById(n.treeRowId);
                         if (row) {
                             row.classList.add("bg-amber-500/20", "border-amber-400", "text-amber-300");
@@ -2305,6 +2556,54 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     trailContainer.appendChild(sep);
                 }
             });
+            updateBreadcrumbBarDisplay();
+        }
+
+        function toggleBreadcrumbMode() {
+            const hasKeyword = !!activeSearchQuery.trim();
+            if (!hasKeyword) {
+                breadcrumbMode = "path";
+            } else {
+                breadcrumbMode = breadcrumbMode === "path" ? "keyword" : "path";
+            }
+            updateBreadcrumbBarDisplay();
+        }
+
+        function updateBreadcrumbBarDisplay() {
+            const modeToggle = document.getElementById("breadcrumb-mode-toggle");
+            const pathEl = document.getElementById("breadcrumb-trail");
+            const keywordEl = document.getElementById("breadcrumb-keyword");
+            const clearBtn = document.getElementById("breadcrumb-keyword-clear");
+            const searchBtn = document.getElementById("breadcrumb-search-btn");
+            if (!modeToggle || !pathEl || !keywordEl || !clearBtn || !searchBtn) return;
+
+            const rawKeyword = activeSearchQuery.trim();
+            const hasKeyword = rawKeyword.length > 0;
+            if (!hasKeyword && breadcrumbMode === "keyword") breadcrumbMode = "path";
+
+            const showingKeyword = hasKeyword && breadcrumbMode === "keyword";
+            modeToggle.textContent = showingKeyword ? "Keyword" : "Path";
+            if (showingKeyword) {
+                modeToggle.classList.remove("border-slate-700", "bg-slate-800", "text-slate-300");
+                modeToggle.classList.add("border-sky-500/60", "bg-sky-900/40", "text-sky-200");
+            } else {
+                modeToggle.classList.remove("border-sky-500/60", "bg-sky-900/40", "text-sky-200");
+                modeToggle.classList.add("border-slate-700", "bg-slate-800", "text-slate-300");
+            }
+
+            if (showingKeyword) {
+                pathEl.classList.add("hidden");
+                keywordEl.classList.remove("hidden");
+                keywordEl.textContent = rawKeyword;
+                clearBtn.classList.remove("hidden");
+                searchBtn.classList.add("hidden");
+            } else {
+                pathEl.classList.remove("hidden");
+                keywordEl.classList.add("hidden");
+                keywordEl.textContent = "";
+                clearBtn.classList.add("hidden");
+                searchBtn.classList.remove("hidden");
+            }
         }
 
         function getRealNodeSum(node) {
@@ -2472,6 +2771,8 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const width = wrapper.clientWidth;
             const height = wrapper.clientHeight;
             const dpr = window.devicePixelRatio || 1;
+            const textScale = Math.max(0.7, Math.min(1.6, (themeTextStyle.scale || 100) / 100));
+            const labelFill = themeTextStyle.fill || "#ffffff";
             
             canvas.width = width * dpr;
             canvas.height = height * dpr;
@@ -2487,14 +2788,11 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 const h = Math.max(0, d.y1 - d.y0);
                 if (w <= 0 || h <= 0) return;
 
-                const isExactChainLeaf = d.data.vdisk_id && activeChainVDiskIds.has(String(d.data.vdisk_id));
+                const isExactChainLeaf = isActiveLineageHighlight(d.data) && !!d.data.vdisk_id;
                 const isExactChainBlockRoot = d.data.is_shared_clone_block && activeChainId && String(d.data.chain_id) === String(activeChainId);
                 const isExactChainBlockMember = d.data.is_shared_clone_block && d.data.member_chain_ids && activeChainId && d.data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
                 const isExactChainBlockActiveMember = d.data.is_shared_clone_block && d.data.chain_id && activeMemberChainIds.has(String(d.data.chain_id));
-                const isExactSharedParentBlock = d.data.is_shared_parent_vdisk && activeChainId && (
-                    String(d.data.selected_shared_chain_id || d.data.chain_id || "") === String(activeChainId) ||
-                    (Array.isArray(d.data.leaf_candidates) && d.data.leaf_candidates.some(r => String(r.chain_id || "") === String(activeChainId)))
-                );
+                const isExactSharedParentBlock = d.data.is_shared_parent_vdisk && isActiveLineageHighlight(d.data);
 
                 const isHighlight = isExactChainLeaf || isExactChainBlockRoot || isExactChainBlockMember || isExactChainBlockActiveMember || isExactSharedParentBlock;
                 const containsChainVDisk = !isHighlight && nodeContainsChainVDisk(d);
@@ -2503,7 +2801,10 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     const sig = selectedNodeSignature;
                     if (sig.type === "vdisk") return d.data.vdisk_id !== undefined && d.data.vdisk_id !== null && String(d.data.vdisk_id) === sig.id;
                     if (sig.type === "shared_block") return !!d.data.is_shared_clone_block && String(d.data.chain_id || "") === sig.chainId;
-                    if (sig.type === "shared_parent") return !!d.data.is_shared_parent_vdisk && String(d.data.chain_id || "") === sig.chainId;
+                    if (sig.type === "shared_parent") {
+                        if (sig.lineageId) return !!d.data.is_shared_parent_vdisk && resolveNodeLineageId(d.data) === sig.lineageId;
+                        return !!d.data.is_shared_parent_vdisk && String(d.data.chain_id || "") === sig.chainId;
+                    }
                     if (sig.type === "group") return !d.data.vdisk_id && !d.data.is_shared_clone_block && !d.data.is_shared_parent_vdisk && String(d.data.name || "") === sig.name;
                     return false;
                 })();
@@ -2559,22 +2860,21 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     
                     let textY = d.y0 + 13;
                     if (d.data.is_shared_clone_block) {
-                        ctx.fillStyle = isHighlight ? "#fcd34d" : "#7dd3fc";
-                        ctx.font = "bold 10px monospace";
-                        ctx.fillText("🔗 Chain Fam", d.x0 + 4, textY);
-                        ctx.fillStyle = "#fcd34d";
-                        ctx.fillText(`Size: ${d.data.formatted_size}`, d.x0 + 4, textY + 12);
-                        ctx.fillStyle = "#94a3b8";
-                        ctx.font = "9px monospace";
-                        ctx.fillText(`PEG: ${d.data.formatted_total_peg || d.data.formatted_max_peg || "0 KiB"}`, d.x0 + 4, textY + 22);
+                        ctx.font = `bold ${Math.round(10 * textScale)}px monospace`;
+                        drawTreemapLabel(ctx, "🔗 Chain Fam", d.x0 + 4, textY, { fill: isHighlight ? "#fbbf24" : labelFill });
+                        drawTreemapLabel(ctx, `Size: ${d.data.formatted_size}`, d.x0 + 4, textY + 12, { fill: labelFill });
+                        ctx.font = `${Math.round(9 * textScale)}px monospace`;
+                        drawTreemapLabel(ctx, `PEG: ${d.data.formatted_total_peg || d.data.formatted_max_peg || "0 KiB"}`, d.x0 + 4, textY + 22, { fill: labelFill });
                     } else if (d.children) {
-                        ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
-                        ctx.fillRect(d.x0, d.y0, w, 22);
-                        ctx.fillStyle = "#f8fafc";
-                        ctx.font = "bold 11px sans-serif";
+                        if (themeTextStyle.headerBar) {
+                            ctx.fillStyle = "rgba(15, 23, 42, 0.72)";
+                            ctx.fillRect(d.x0, d.y0, w, Math.round(22 * textScale));
+                        }
+                        ctx.font = `bold ${Math.round(11 * textScale)}px sans-serif`;
                         let label = d.data.name;
                         if (containsChainVDisk) label = "🔗 " + label;
-                        ctx.fillText(`${label} (${formatBytes(getRealNodeSum(d))})`, d.x0 + 4, d.y0 + 14);
+                        // OneClickKB-style: bold label directly on colored tile.
+                        drawTreemapLabel(ctx, `${label} (${formatBytes(getRealNodeSum(d))})`, d.x0 + 4, d.y0 + Math.round(14 * textScale), { fill: labelFill });
                     } else {
                         if (isExactChainLeaf) {
                             ctx.fillStyle = "#f59e0b";
@@ -2585,27 +2885,26 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                             textY += 14;
                         }
                         // Center usage text inside the leaf block for readability.
-                        ctx.fillStyle = d.data.is_free ? "#86efac" : d.data.is_to_remove ? "#fda4af" : "#fcd34d";
                         const usageText = formatBytes(getRealNodeSum(d));
                         const usageCenterX = d.x0 + (w / 2);
                         const usageCenterY = d.y0 + (h / 2);
                         const maxFontByHeight = Math.floor(h * 0.32);
                         const maxFontByWidth = Math.floor(w / Math.max(usageText.length * 0.65, 1));
-                        const usageFontPx = Math.min(11, maxFontByHeight, maxFontByWidth);
+                        const usageFontPx = Math.min(Math.round(11 * textScale), maxFontByHeight, maxFontByWidth);
                         // Hide value when block is too small to avoid overlap clutter.
                         if (w >= 38 && h >= 18 && usageFontPx >= 7) {
                             ctx.font = `bold ${usageFontPx}px monospace`;
                             ctx.textAlign = "center";
                             ctx.textBaseline = "middle";
-                            ctx.fillText(usageText, usageCenterX, usageCenterY);
+                            const usageFill = d.data.is_free ? "#86efac" : d.data.is_to_remove ? "#fda4af" : labelFill;
+                            drawTreemapLabel(ctx, usageText, usageCenterX, usageCenterY, { fill: usageFill });
                             ctx.textAlign = "start";
                             ctx.textBaseline = "alphabetic";
                         }
                         if (w > 120 && h > 34 && (d.data.formatted_curator_physical || d.data.formatted_shared_storage_curator_estimated)) {
-                            ctx.fillStyle = "#93c5fd";
-                            ctx.font = "9px monospace";
+                            ctx.font = `${Math.round(9 * textScale)}px monospace`;
                             const curatorStr = d.data.formatted_curator_physical || d.data.formatted_shared_storage_curator_estimated || "n/a";
-                            ctx.fillText(`C:${curatorStr}`, d.x0 + 4, textY + 22);
+                            drawTreemapLabel(ctx, `C:${curatorStr}`, d.x0 + 4, textY + 22, { fill: labelFill });
                         }
                     }
                 }
@@ -2776,6 +3075,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             lineageParentByChild = new Map();
             lineageChildrenByParent = new Map();
             chainTreeVDiskIdsByChainId = new Map();
+            vdiskIdsByLineageId = new Map();
             if (!fullRootNode) return;
 
             const addChildEdge = (parentId, childId) => {
@@ -2792,6 +3092,12 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 const vid = info.vdisk_id !== undefined && info.vdisk_id !== null ? String(info.vdisk_id) : null;
                 if (vid && !lineageNodeByVdiskId.has(vid)) {
                     lineageNodeByVdiskId.set(vid, info);
+                }
+
+                const lid = resolveNodeLineageId(info);
+                if (vid && lid) {
+                    if (!vdiskIdsByLineageId.has(lid)) vdiskIdsByLineageId.set(lid, new Set());
+                    vdiskIdsByLineageId.get(lid).add(vid);
                 }
 
                 const summary = info.lineage_summary || {};
@@ -2817,8 +3123,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 }
             });
 
-            // Build chain-tree highlight index: selecting any chain member highlights
-            // all vdisks across member chains in the same tree.
+            // Keep chain-tree index as fallback when lineage_id is missing.
             fullRootNode.each(n => {
                 const info = n.data || {};
                 if (!Array.isArray(info.chain_trees)) return;
@@ -2881,6 +3186,24 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             return Array.from(kids).sort((a, b) => Number(a) - Number(b));
         }
 
+        function getVDiskExclusiveUsageBytes(vdiskId) {
+            if (!fullRootNode || vdiskId === undefined || vdiskId === null) return null;
+            const targetId = String(vdiskId);
+            let best = null;
+            fullRootNode.each(n => {
+                const nd = n.data || {};
+                if (nd.vdisk_id !== undefined && nd.vdisk_id !== null && String(nd.vdisk_id) === targetId) {
+                    const val = Number(
+                        nd.physical_curator_bytes !== undefined && nd.physical_curator_bytes !== null
+                            ? nd.physical_curator_bytes
+                            : (nd.real_bytes || 0)
+                    );
+                    if (best === null || val > best) best = val;
+                }
+            });
+            return best;
+        }
+
         function collectChainVDiskRows(chainId) {
             const cid = (chainId !== undefined && chainId !== null) ? String(chainId) : "";
             if (!cid || !fullRootNode) return [];
@@ -2919,23 +3242,25 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         function applyActiveLineageFromNodeData(info) {
             activeMemberChainIds.clear();
-            if (info && info.chain_id) activeChainId = String(info.chain_id);
-            else activeChainId = null;
-
             activeChainVDiskIds.clear();
-            if (info && info.vdisk_id !== undefined && info.vdisk_id !== null) {
-                collectLineageVDiskIds(info.vdisk_id).forEach(id => activeChainVDiskIds.add(String(id)));
-            } else if (info && info.chain_info && Array.isArray(info.chain_info)) {
-                info.chain_info.forEach(tree => {
-                    if (tree.chain_ids) tree.chain_ids.forEach(cid => activeChainVDiskIds.add(String(cid)));
-                });
+            activeChainId = (info && info.chain_id) ? String(info.chain_id) : null;
+
+            // Primary highlight rule: same lineage_id across live/snapshot/shared blocks.
+            const lid = resolveNodeLineageId(info);
+            activeLineageId = lid;
+            if (lid && vdiskIdsByLineageId.has(lid)) {
+                vdiskIdsByLineageId.get(lid).forEach(id => activeChainVDiskIds.add(String(id)));
             }
 
-            // Chain-tree highlight rule: selecting one vdisk highlights all vdisks
-            // in member chains of the selected vdisk's chain tree.
-            if (info && info.chain_id) {
-                const treeVDiskIds = chainTreeVDiskIdsByChainId.get(String(info.chain_id));
-                if (treeVDiskIds) treeVDiskIds.forEach(id => activeChainVDiskIds.add(String(id)));
+            // Fallback when lineage_id is unavailable on older payloads.
+            if (activeChainVDiskIds.size === 0) {
+                if (info && info.vdisk_id !== undefined && info.vdisk_id !== null) {
+                    collectLineageVDiskIds(info.vdisk_id).forEach(id => activeChainVDiskIds.add(String(id)));
+                }
+                if (info && info.chain_id) {
+                    const treeVDiskIds = chainTreeVDiskIdsByChainId.get(String(info.chain_id));
+                    if (treeVDiskIds) treeVDiskIds.forEach(id => activeChainVDiskIds.add(String(id)));
+                }
             }
         }
 
@@ -2946,29 +3271,35 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const selectedChain = String(info && (info.selected_shared_chain_id || info.chain_id || "") || "");
             activeChainId = selectedChain || null;
 
-            const candidateChainIds = new Set();
-            if (selectedChain) candidateChainIds.add(selectedChain);
-            if (info && info.chain_id) candidateChainIds.add(String(info.chain_id));
-            if (Array.isArray(info && info.member_chain_ids)) {
-                info.member_chain_ids.forEach(cid => candidateChainIds.add(String(cid)));
+            // Shared storage highlight uses lineage_id as the family key.
+            const lid = resolveNodeLineageId(info);
+            activeLineageId = lid;
+            if (lid && vdiskIdsByLineageId.has(lid)) {
+                vdiskIdsByLineageId.get(lid).forEach(id => activeChainVDiskIds.add(String(id)));
             }
-            if (Array.isArray(info && info.leaf_candidates)) {
-                info.leaf_candidates.forEach(row => {
-                    if (row && row.chain_id !== undefined && row.chain_id !== null) {
-                        candidateChainIds.add(String(row.chain_id));
-                    }
+
+            // Fallback to prior chain-tree expansion if lineage map is empty.
+            if (activeChainVDiskIds.size === 0) {
+                const candidateChainIds = new Set();
+                if (selectedChain) candidateChainIds.add(selectedChain);
+                if (info && info.chain_id) candidateChainIds.add(String(info.chain_id));
+                if (Array.isArray(info && info.member_chain_ids)) {
+                    info.member_chain_ids.forEach(cid => candidateChainIds.add(String(cid)));
+                }
+                if (Array.isArray(info && info.leaf_candidates)) {
+                    info.leaf_candidates.forEach(row => {
+                        if (row && row.chain_id !== undefined && row.chain_id !== null) {
+                            candidateChainIds.add(String(row.chain_id));
+                        }
+                    });
+                }
+                candidateChainIds.forEach(cid => {
+                    const treeVDiskIds = chainTreeVDiskIdsByChainId.get(String(cid));
+                    if (treeVDiskIds) treeVDiskIds.forEach(id => activeChainVDiskIds.add(String(id)));
                 });
-            }
-
-            // Always expand to all VDisks in the full chain tree for each candidate chain.
-            candidateChainIds.forEach(cid => {
-                const treeVDiskIds = chainTreeVDiskIdsByChainId.get(String(cid));
-                if (treeVDiskIds) treeVDiskIds.forEach(id => activeChainVDiskIds.add(String(id)));
-            });
-
-            // Fallback for older payloads that only carry direct vdisk ids.
-            if (activeChainVDiskIds.size === 0 && Array.isArray(info && info.vdisk_ids)) {
-                info.vdisk_ids.forEach(id => activeChainVDiskIds.add(String(id)));
+                if (activeChainVDiskIds.size === 0 && Array.isArray(info && info.vdisk_ids)) {
+                    info.vdisk_ids.forEach(id => activeChainVDiskIds.add(String(id)));
+                }
             }
         }
 
@@ -3049,7 +3380,11 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             } else if (info.is_shared_clone_block) {
                 selectedNodeSignature = { type: "shared_block", chainId: String(info.chain_id || "") };
             } else if (info.is_shared_parent_vdisk) {
-                selectedNodeSignature = { type: "shared_parent", chainId: String(info.chain_id || "") };
+                selectedNodeSignature = {
+                    type: "shared_parent",
+                    lineageId: resolveNodeLineageId(info),
+                    chainId: String(info.chain_id || ""),
+                };
             } else {
                 selectedNodeSignature = { type: "group", name: String(info.name || "") };
             }
@@ -3197,6 +3532,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     <div class="mt-2 p-2.5 bg-slate-950/70 border border-sky-500/40 rounded-lg space-y-1.5 font-sans">
                         <div class="text-xs font-bold text-sky-400 border-b border-slate-800 pb-1">🔗 Root Chain Shared Storage</div>
                         <div class="flex justify-between items-center"><span class="text-slate-400">Shared Size:</span> <span class="font-mono text-amber-300 font-bold text-xs">${formatBytes(info.shared_storage_bytes || info.real_bytes || 0)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Lineage ID:</span> <span class="font-mono text-slate-200 text-[10px] break-all">${valOrNa(info.lineage_id || info.name)}</span></div>
                         <div class="flex justify-between items-center"><span class="text-slate-400">Root Chain ID:</span> <span class="font-mono text-slate-200 text-[10px] break-all">${valOrNa(info.root_chain_id || info.chain_id)}</span></div>
                         <div class="flex justify-between items-center"><span class="text-slate-400">Selected Chain:</span> <span class="font-mono text-emerald-300 text-[10px] break-all">${valOrNa(info.selected_shared_chain_id || info.chain_id)}</span></div>
                         ${info.shared_formula_source ? `<div class="flex justify-between items-center"><span class="text-slate-400">Shared Formula:</span> <span class="font-mono text-cyan-300">${valOrNa(info.shared_formula_source)}</span></div>` : ""}
@@ -3263,6 +3599,14 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     <div><span class="text-slate-400">NFS File Name:</span> <span class="font-mono text-slate-200 break-all">${valOrNa(info.nfs_file_name)}</span></div>
                     <div><span class="text-slate-400">Chain ID:</span> <span class="font-mono text-slate-300 text-[10px] break-all">${valOrNa(info.chain_id)}</span></div>
                     <div><span class="text-slate-400">Creation Time:</span> <span class="font-mono text-slate-200">${formatUsecsToLocalTime(info.creation_time_usecs || info.vdisk_creation_time_usecs)}</span></div>
+                    ${(() => {
+                        const origin = formatOriginatingClusterLabel(info);
+                        const scopeClass = origin.scope === "local" ? "text-emerald-300" : "text-amber-300";
+                        return `
+                    <div><span class="text-slate-400">Originating Cluster:</span> <span class="font-mono ${scopeClass}">${origin.label}</span>${origin.scope === "remote" ? ` <span class="font-mono text-slate-300 text-[10px] break-all">→ ${origin.detail}</span>` : ""}</div>
+                    ${origin.scope === "remote" ? `<div><span class="text-slate-400">Originating Cluster Incarnation:</span> <span class="font-mono text-slate-200 text-[10px] break-all">${valOrNa(info.originating_cluster_incarnation_id)}</span></div>` : ""}
+                        `;
+                    })()}
                 `;
 
                 if (info.chain_stats && Object.keys(info.chain_stats).length > 0) {
@@ -3315,20 +3659,25 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 const familyChildrenIds = Array.isArray(info.children_vdisk_ids)
                     ? info.children_vdisk_ids.map(String)
                     : (Array.isArray(ls.children_vdisk_ids) ? ls.children_vdisk_ids.map(String) : directChildren.map(String));
+                const rootId = ls.lineage_root_vdisk_id ? String(ls.lineage_root_vdisk_id) : "";
+                const rootExclusive = rootId ? getVDiskExclusiveUsageBytes(rootId) : null;
+                const parentExclusive = familyParentId ? getVDiskExclusiveUsageBytes(familyParentId) : null;
                 fieldsHtml += `
                     <div class="mt-3 p-2 bg-slate-950/70 border border-emerald-500/30 rounded-lg space-y-1 text-[11px]">
                         <div class="font-bold text-emerald-300 border-b border-slate-800 pb-0.5 mb-1">Family</div>
+                        <div><span class="text-slate-400">Depth from Root:</span> <span class="font-mono text-slate-200">${ls.depth_from_root !== undefined && ls.depth_from_root !== null ? ls.depth_from_root : "n/a"}</span></div>
                         <div><span class="text-slate-400">Root VDisk:</span>
-                            ${ls.lineage_root_vdisk_id ? `<button onclick="selectLineageVDisk('${ls.lineage_root_vdisk_id}')" class="ml-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 hover:bg-sky-900 text-sky-300 font-mono">${ls.lineage_root_vdisk_id}</button>` : '<span class="font-mono text-slate-500">n/a</span>'}
+                            ${rootId ? `<button onclick="selectLineageVDisk('${rootId}')" class="ml-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 hover:bg-sky-900 text-sky-300 font-mono">${rootId}</button> <span class="ml-1 font-mono text-amber-300">${rootExclusive !== null ? formatBytes(rootExclusive) : "n/a"}</span>` : '<span class="font-mono text-slate-500">n/a</span>'}
                         </div>
                         <div><span class="text-slate-400">Parent:</span>
-                            ${familyParentId ? `<button onclick="selectLineageVDisk('${familyParentId}')" class="ml-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 hover:bg-sky-900 text-sky-300 font-mono">${familyParentId}</button>` : '<span class="font-mono text-slate-500">n/a</span>'}
+                            ${familyParentId ? `<button onclick="selectLineageVDisk('${familyParentId}')" class="ml-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 hover:bg-sky-900 text-sky-300 font-mono">${familyParentId}</button> <span class="ml-1 font-mono text-amber-300">${parentExclusive !== null ? formatBytes(parentExclusive) : "n/a"}</span>` : '<span class="font-mono text-slate-500">n/a</span>'}
                         </div>
                         <div class="pt-1 border-t border-slate-800">
                             <div class="text-slate-400 mb-1">Children:</div>
                             ${familyChildrenIds.length > 0 ? familyChildrenIds.map((childId, idx) => `
                                 <button onclick="selectLineageVDisk('${childId}')" class="w-full text-left mb-1 px-2 py-1 rounded border border-slate-700 bg-slate-900 hover:bg-sky-900 text-slate-200 font-mono text-[10px]">
                                     ${idx + 1}. ${childId}
+                                    <span class="ml-2 text-amber-300">${(() => { const b = getVDiskExclusiveUsageBytes(childId); return b !== null ? formatBytes(b) : "n/a"; })()}</span>
                                 </button>
                             `).join("") : `<div class="text-slate-500 italic">No children</div>`}
                         </div>
@@ -3336,6 +3685,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 `;
 
                 // === ADVANCED PROPERTIES DROPDOWN ===
+                const originAdv = formatOriginatingClusterLabel(info);
                 fieldsHtml += `
                 <details class="mt-3 group border border-slate-700 rounded-lg" ${isAdvancedPropertiesOpen ? 'open' : ''} ontoggle="isAdvancedPropertiesOpen = this.open">
                     <summary class="px-3 py-2 text-xs font-semibold text-sky-400 cursor-pointer bg-slate-800/50 hover:bg-slate-700/50 transition flex items-center">
@@ -3352,7 +3702,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                         <div><span class="text-slate-500">Closest Named Ancestor:</span> <span class="font-mono text-slate-300 break-all">${valOrNa(info.closest_named_ancestor)}</span></div>
                         <div><span class="text-slate-500">May Be Parent:</span> <span class="font-mono text-slate-300">${valOrNa(info.may_be_parent)}</span></div>
                         <div><span class="text-slate-500">Has Incomplete Ancestor:</span> <span class="font-mono text-slate-300">${valOrNa(info.has_incomplete_ancestor)}</span></div>
-                        <div><span class="text-slate-500">Originating Cluster ID:</span> <span class="font-mono text-slate-300">${valOrNa(info.originating_cluster_id)}</span></div>
+                        <div><span class="text-slate-500">Originating Cluster:</span> <span class="font-mono ${originAdv.scope === "local" ? "text-emerald-300" : "text-amber-300"}">${originAdv.label}${originAdv.scope === "remote" ? ` → ${originAdv.detail}` : ""}</span></div>
                         <div><span class="text-slate-500">Originating Cluster Incarnation:</span> <span class="font-mono text-slate-300">${valOrNa(info.originating_cluster_incarnation_id)}</span></div>
                         <div><span class="text-slate-500">Parent NFS Hint:</span> <span class="font-mono text-slate-300 break-all">${valOrNa(info.parent_nfs_file_name_hint)}</span></div>
                         
