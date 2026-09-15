@@ -152,6 +152,66 @@ def format_bytes(bytes_val: int) -> str:
     elif val < 1024**4: return f"{val / (1024**3):.2f} GiB"
     else: return f"{val / (1024**4):.2f} TiB"
 
+
+def compute_chain_snap_share(chain_id: str, chain_vdisk_ids: list, chain_usage_map: dict, usage_map: dict) -> dict:
+    """chain_snap_share = (logical_live - logical_shared_clone) * 2 - exclusive_sum."""
+    stats = chain_usage_map.get(chain_id, {}) or {}
+    logical_live = int(stats.get("logical_live", 0) or 0)
+    logical_clone = int(stats.get("logical_shared_clone", 0) or 0)
+    logical_exclusive = int(stats.get("logical_exclusive", 0) or 0)
+    vids = list(chain_vdisk_ids or [])
+    exclusive_sum = sum(int(usage_map.get(str(vd_id), 0) or 0) for vd_id in vids)
+    terms = {
+        "logical_live": logical_live,
+        "logical_shared_clone": logical_clone,
+        "logical_exclusive": logical_exclusive,
+        "exclusive_sum": int(exclusive_sum),
+        "snap_share": 0,
+    }
+    if logical_live == 0:
+        source = "skipped_logical_live_zero"
+        snap_share = 0
+    elif logical_live == logical_exclusive:
+        source = "skipped_live_equals_exclusive"
+        snap_share = 0
+    elif len(vids) <= 1:
+        source = "skipped_single_vdisk"
+        snap_share = 0
+    else:
+        snap_share = (logical_live - logical_clone) * 2 - exclusive_sum
+        if snap_share <= 0:
+            source = "skipped_non_positive"
+            snap_share = 0
+        else:
+            source = "live_minus_clone_x2_minus_exclusive_sum"
+            terms["snap_share"] = int(snap_share)
+    return {
+        "logical_live": logical_live,
+        "logical_shared_clone": logical_clone,
+        "logical_exclusive": logical_exclusive,
+        "exclusive_sum": int(exclusive_sum),
+        "snap_share": int(max(0, snap_share)),
+        "terms": terms,
+        "source": source,
+    }
+
+
+def build_chain_snap_share_leaf(chain_id: str, chain_vdisk_ids: list, computed: dict, container_name: str = None) -> dict:
+    snap_share = int(computed.get("snap_share", 0) or 0)
+    return {
+        "name": str(chain_id),
+        "chain_id": str(chain_id),
+        "vdisk_id": None,
+        "vdisk_ids": list(chain_vdisk_ids or []),
+        "is_chain_snap_share_block": True,
+        "value": snap_share,
+        "real_bytes": snap_share,
+        "formatted_size": format_bytes(snap_share),
+        "snap_share_formula_source": computed.get("source"),
+        "snap_share_formula_terms": computed.get("terms", {}),
+        "container_name": container_name,
+    }
+
 def extract_log_sections(raw_output: str) -> dict:
     headers = [
         "===VDISK_CFG_START===", "===NCLI_VM_START===", "===NCLI_VG_START===",
@@ -1486,9 +1546,36 @@ def process_container_chain_graph_logs(sections: dict):
                 "children": shared_storage_nodes,
             })
 
+        snap_share_nodes = []
+        seen_snap_chains = set()
+        for vid in cg.vdisk_ids:
+            vnode = vdisk_nodes.get(str(vid))
+            if not vnode or not vnode.chain_id:
+                continue
+            cid = str(vnode.chain_id)
+            if cid in seen_snap_chains:
+                continue
+            seen_snap_chains.add(cid)
+            chain_vids = chain_to_vdisk_ids.get(cid, [])
+            computed = compute_chain_snap_share(cid, chain_vids, chain_usage_map, usage_map)
+            if int(computed.get("snap_share", 0) or 0) <= 0:
+                continue
+            snap_share_nodes.append(
+                build_chain_snap_share_leaf(cid, chain_vids, computed, cg.container_name)
+            )
+        snap_share_nodes.sort(key=lambda x: int(x.get("real_bytes", 0) or 0), reverse=True)
+        snap_share_total = sum(int(n.get("real_bytes", 0) or 0) for n in snap_share_nodes)
+        if snap_share_nodes:
+            container_children.append({
+                "name": "Chain Snap Share",
+                "aggregate_exclusive_bytes": snap_share_total,
+                "formatted_size": format_bytes(snap_share_total),
+                "children": snap_share_nodes,
+            })
+
         explicit_res_bytes = int(c.get("explicit_res_logical_bytes", 0) or 0)
         explicit_res_scaled_bytes = explicit_res_bytes * cg.replication_factor
-        other_total = c_total + shared_total
+        other_total = c_total + shared_total + snap_share_total
         explicit_residual_bytes = explicit_res_scaled_bytes - other_total
         if explicit_residual_bytes > 0:
             container_children.append({
@@ -1725,6 +1812,18 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
             "vdisk_ids": sorted(list(chain_vdisks))
         })
 
+    container_snap_share_nodes = {}
+    for cid, c_node in chains.items():
+        chain_vdisks = list(c_node.get("vdisk_ids", []))
+        computed = compute_chain_snap_share(cid, chain_vdisks, chain_usage_map, usage_map)
+        if int(computed.get("snap_share", 0) or 0) <= 0:
+            continue
+        c_id = c_node.get("container_id") or "Unknown"
+        c_name = ctr_map.get(str(c_id), f"Container-{c_id}")
+        container_snap_share_nodes.setdefault(c_name, []).append(
+            build_chain_snap_share_leaf(cid, chain_vdisks, computed, c_name)
+        )
+
     # --- STEP 3: Exclusive VDisk Usage Calculation ---
     container_tree = {}
     NOMINAL_LAYOUT_BYTES = 10 * 1024 * 1024
@@ -1800,7 +1899,7 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
 
     # --- STEP 4: Aggregate Final JSON Payload ---
     container_nodes = []
-    all_c_names = set(container_tree.keys()).union(container_shared_nodes.keys())
+    all_c_names = set(container_tree.keys()).union(container_shared_nodes.keys()).union(container_snap_share_nodes.keys())
 
     for c_name in all_c_names:
         entities = container_tree.get(c_name, {})
@@ -1810,6 +1909,9 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
         shared_clone_blocks = container_shared_nodes.get(c_name, [])
         if shared_clone_blocks:
             entities["Shared Clones"] = shared_clone_blocks
+        snap_share_blocks = container_snap_share_nodes.get(c_name, [])
+        if snap_share_blocks:
+            entities["Chain Snap Share"] = snap_share_blocks
 
         e_nodes = []
         for e_name, v_list in entities.items():

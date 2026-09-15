@@ -25,9 +25,9 @@
         .resizer {
             width: 8px;
             cursor: col-resize;
-            background-color: #1e293b;
-            border-left: 1px solid #334155;
-            border-right: 1px solid #334155;
+            background-color: #020617;
+            border-left: 1px solid #1e293b;
+            border-right: 1px solid #1e293b;
             transition: background-color 0.2s ease, box-shadow 0.2s ease;
             z-index: 40;
             flex-shrink: 0;
@@ -87,7 +87,7 @@
         }
     </style>
 </head>
-<body class="bg-slate-900 text-slate-300 flex flex-col h-screen overflow-hidden">
+<body class="bg-slate-950 text-slate-300 flex flex-col h-screen overflow-hidden">
 
     <!-- Search Overlay Modal -->
     <div id="search-modal" onclick="closeSearchModal(event)" class="fixed inset-0 bg-slate-950/55 backdrop-blur-xs hidden z-[80] flex items-center justify-center p-4 transition-opacity duration-200">
@@ -150,6 +150,10 @@
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
                     <span class="text-slate-300 font-medium">Shared VDisks</span>
                     <input type="color" id="picker-sharedClone" onchange="updateColorFromPicker('sharedClone', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Chain Snap Share</span>
+                    <input type="color" id="picker-chainSnapShare" onchange="updateColorFromPicker('chainSnapShare', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
                     <span class="text-slate-300 font-medium">Reserved Available Space</span>
@@ -232,7 +236,7 @@
     </div>
 
     <!-- Floating Cursor Tooltip -->
-    <div id="floating-tooltip" class="fixed hidden bg-slate-900/95 border border-sky-500 text-slate-300 text-xs px-3 py-2 rounded-lg shadow-2xl pointer-events-none z-[9999] backdrop-blur-sm transition-opacity duration-75"></div>
+    <div id="floating-tooltip" class="fixed hidden bg-slate-900/80 text-slate-300 text-xs px-3 py-2 rounded shadow-2xl pointer-events-none z-[9999] transition-opacity duration-75"></div>
 
     <!-- Hidden Offline Log Analysis Panel -->
     <div id="offline-analysis-panel" class="fixed inset-0 h-screen bg-slate-950 border-t-2 border-emerald-500 shadow-2xl z-[70] transform translate-y-full transition-transform duration-300 ease-out flex flex-col">
@@ -260,60 +264,69 @@
     </div>
 
     <!-- Top Connection Header -->
-    <header class="bg-slate-800 border-b border-slate-700 px-6 py-3 flex flex-nowrap justify-between items-center gap-4 flex-shrink-0 z-20 overflow-x-auto">
+    <header class="bg-slate-950 border-b border-slate-800 px-6 py-3 flex flex-nowrap justify-between items-center gap-4 flex-shrink-0 z-20 overflow-x-auto">
         <div class="flex items-center space-x-3 flex-shrink-0">
             <button id="sidebar-toggle-btn" onclick="toggleSidebar()" title="Toggle Sidebar"
-                    class="p-1.5 bg-slate-700 hover:bg-sky-600 rounded text-slate-200 transition focus:outline-none flex items-center justify-center">
+                    class="p-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sky-400 transition focus:outline-none flex items-center justify-center">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
                 </svg>
             </button>
-            <h1 class="text-xl font-bold text-sky-400">Nutanix Storage Sniffer</h1>
+            <h1 class="text-xl font-bold text-slate-200">Nutanix Storage Sniffer</h1>
 
         </div>
 
-        <div class="flex items-center space-x-3 flex-shrink-0">
-            <div class="bg-slate-900 p-1 rounded border border-slate-700 flex text-xs">
-                <button id="mode-ssh-btn" onclick="switchMode('ssh')" class="px-3 py-1 rounded bg-sky-500 text-white font-semibold transition">🚀 Live CVM</button>
-                <button id="mode-file-btn" onclick="switchMode('file')" class="px-3 py-1 rounded text-slate-400 hover:text-white transition">📂 Offline Mode</button>
+        <div class="flex items-stretch space-x-3 h-9 flex-shrink-0">
+            <div class="bg-slate-700 rounded flex text-xs h-full">
+                <button id="mode-ssh-btn" onclick="switchMode('ssh')" class="px-3 h-full rounded text-sky-400 font-semibold transition flex items-center justify-center">Live CVM</button>
+                <button id="mode-file-btn" onclick="switchMode('file')" class="px-3 h-full rounded text-white/90 hover:text-white transition flex items-center justify-center">Offline Mode</button>
             </div>
 
-            <form id="cvm-form" onsubmit="scanCVM(event)" class="flex items-center space-x-2 text-xs">
-                <input type="text" id="cvm_ip" placeholder="CVM IP (e.g. 192.168.100.21)" required
-                       class="bg-slate-900 border border-slate-600 px-3 py-1.5 rounded focus:outline-none focus:border-sky-500 w-44">
-                <input type="text" id="username" value="nutanix" placeholder="Username" required
-                       class="bg-slate-900 border border-slate-600 px-3 py-1.5 rounded focus:outline-none focus:border-sky-500 w-24">
-                <input type="password" id="password" placeholder="Password" required
-                       class="bg-slate-900 border border-slate-600 px-3 py-1.5 rounded focus:outline-none focus:border-sky-500 w-28">
-                <button type="submit" id="scan-btn"
-                        class="bg-sky-500 hover:bg-sky-600 font-semibold px-4 py-1.5 rounded text-white transition flex items-center space-x-1">
-                    <span>Analyze</span>
-                </button>
-            </form>
+            <div class="w-[36rem] flex-shrink-0 h-full">
+                <form id="cvm-form" onsubmit="scanCVM(event)" class="flex items-stretch gap-2 text-xs w-full h-full">
+                    <input type="text" id="cvm_ip" placeholder="CVM IP (e.g. 192.168.100.21)" required
+                           class="flex-1 min-w-0 h-full bg-slate-900 border border-slate-600 px-3 py-0 rounded focus:outline-none focus:border-sky-500">
+                    <input type="text" id="username" value="nutanix" placeholder="Username" required
+                           class="w-[6.5rem] min-w-0 h-full bg-slate-900 border border-slate-600 px-3 py-0 rounded focus:outline-none focus:border-sky-500">
+                    <input type="password" id="password" placeholder="Password" required
+                           class="w-[7.5rem] min-w-0 h-full bg-slate-900 border border-slate-600 px-3 py-0 rounded focus:outline-none focus:border-sky-500">
+                    <button type="submit" id="scan-btn"
+                            class="w-24 shrink-0 h-full bg-slate-700 hover:bg-slate-600 font-semibold px-3 rounded text-sky-400 transition flex items-center justify-center">
+                        Analyze
+                    </button>
+                </form>
 
-            <form id="offline-form" onsubmit="uploadOfflineFile(event)" class="hidden flex items-center space-x-2 text-xs">
-                <button type="button" id="copy-script-btn" onclick="copyOfflineCommand()" 
-                        class="bg-slate-700 hover:bg-slate-600 font-semibold px-3 py-1.5 rounded text-white transition flex items-center space-x-1" title="Download offline collector script">
-                    <span>📥 Download Python Script</span>
-                </button>
-                <input type="file" id="offline_file" accept=".log,.txt" required
-                       class="bg-slate-900 border border-slate-600 px-3 py-1 rounded focus:outline-none focus:border-sky-500 text-slate-300 w-64 file:mr-2 file:py-0.5 file:px-2 file:rounded file:border-0 file:text-xs file:bg-slate-700 file:text-slate-200 hover:file:bg-sky-600">
-                <button type="submit" id="upload-btn"
-                        class="bg-emerald-500 hover:bg-emerald-600 font-semibold px-4 py-1.5 rounded text-white transition flex items-center space-x-1">
-                    <span>Analyze</span>
-                </button>
-            </form>
+                <form id="offline-form" onsubmit="uploadOfflineFile(event)" class="hidden flex items-stretch gap-2 text-xs w-full h-full">
+                    <button type="button" id="copy-script-btn" onclick="copyOfflineCommand()"
+                            class="shrink-0 h-full bg-slate-700 hover:bg-slate-600 font-semibold px-3 rounded text-white transition flex items-center justify-center gap-1.5"
+                            title="Download offline collector script">
+                        <span class="leading-none">↓</span>
+                        <span id="copy-script-label">script</span>
+                    </button>
+                    <input type="file" id="offline_file" accept=".log,.txt" class="hidden" onchange="onOfflineFileSelected()">
+                    <button type="button" id="offline-file-btn" onclick="document.getElementById('offline_file').click()"
+                            class="grow min-w-0 h-full bg-slate-700 hover:bg-slate-600 font-semibold px-3 rounded text-slate-200 transition flex items-center justify-center gap-1.5"
+                            title="Upload offline log file">
+                        <span class="text-sm font-bold leading-none">+</span>
+                        <span id="offline-file-label" class="truncate">Upload file</span>
+                    </button>
+                    <button type="submit" id="upload-btn"
+                            class="w-24 shrink-0 h-full bg-slate-700 hover:bg-slate-600 font-semibold px-3 rounded text-emerald-400 transition flex items-center justify-center">
+                        Analyze
+                    </button>
+                </form>
+            </div>
         </div>
     </header>
 
-    <div class="flex flex-1 overflow-hidden relative">
+    <div id="main-layout" class="flex flex-1 overflow-hidden relative">
         <!-- Left Sidebar Panel -->
-        <div id="sidebar" class="bg-slate-800 p-4 flex flex-col min-h-0 flex-shrink-0 transition-all duration-300 ease-in-out relative overflow-hidden" style="width: 320px;">
+        <div id="sidebar" class="bg-slate-950 p-4 flex flex-col min-h-0 flex-shrink-0 transition-all duration-300 ease-in-out relative overflow-hidden" style="width: 320px;">
             
             <!-- Top Hierarchy Section -->
             <div id="hierarchy-wrapper" class="flex flex-col min-h-[100px] overflow-hidden" style="flex: 1 1 0%;">
                 <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex-shrink-0 text-center">Storage Pool Hierarchy</h2>
-                <div id="hierarchy-tree-container" class="flex-1 overflow-y-auto pr-1 space-y-1 bg-slate-900/50 p-2 rounded border border-slate-700/60 font-sans">
+                <div id="hierarchy-tree-container" class="flex-1 overflow-y-auto pr-1 space-y-1 bg-slate-950 p-2 rounded border border-slate-800 font-sans">
                     <p class="text-xs text-slate-500 italic text-center">No storage pool loaded.</p>
                 </div>
             </div>
@@ -326,24 +339,24 @@
             <!-- Middle Inspector Section -->
             <div id="inspector-wrapper" class="flex-1 flex flex-col min-h-[100px] mb-2 min-w-0 overflow-hidden flex-shrink-0">
                 <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex-shrink-0 text-center">Storage Pool Inspector</h2>
-                <div id="inspector" class="flex-1 bg-slate-900 p-3 rounded-lg border border-slate-700 text-xs space-y-2 overflow-y-auto transition-all duration-200 custom-scrollbar">
+                <div id="inspector" class="flex-1 bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs space-y-2 overflow-y-auto transition-all duration-200 custom-scrollbar">
                     <p class="text-slate-500 text-center">Connect to a CVM or load an offline diagnostic log file.</p>
                 </div>
             </div>
 
             <!-- Legend & Interactive Color Palette Button -->
-            <div id="legend-container" class="flex-shrink-0 space-y-2 text-xs text-slate-400 border-t border-slate-700 pt-3">
+            <div id="legend-container" class="flex-shrink-0 space-y-2 text-xs text-slate-400 border-t border-slate-800 pt-3">
                 <div class="flex justify-between items-center mb-1">
-                    <div class="flex items-center space-x-1.5 w-full">
+                    <div class="flex items-stretch space-x-1.5 w-full">
                         <div class="relative flex-1 min-w-0">
-                            <button id="legend-filter-button" onclick="toggleLegendFilterMenu(event)" class="w-full text-xs bg-slate-900 border border-slate-700 text-slate-300 px-3 py-1.5 rounded focus:outline-none flex items-center justify-between">
+                            <button id="legend-filter-button" onclick="toggleLegendFilterMenu(event)" class="w-full h-full text-xs bg-slate-900 border border-slate-700 text-slate-300 px-3 py-1.5 rounded focus:outline-none flex items-center justify-between">
                                 <span id="legend-filter-label" class="inline-flex items-center"></span>
                                 <span class="ml-2">▾</span>
                             </button>
                             <div id="legend-filter-menu" class="hidden fixed z-[75] bg-slate-900/90 backdrop-blur-md border border-slate-700 rounded shadow-2xl min-w-[280px] p-2 overflow-y-auto"></div>
                         </div>
-                        <button onclick="openTextStyleModal()" class="text-[10px] bg-slate-700 hover:bg-sky-600 text-slate-200 px-2 py-0.5 rounded transition flex-shrink-0 font-bold" title="Treemap text style">Aa</button>
-                        <button onclick="openColorModal()" class="text-[10px] bg-slate-700 hover:bg-amber-600 text-slate-200 px-2 py-0.5 rounded transition flex-shrink-0" title="Customize palette">🎨</button>
+                        <button onclick="openTextStyleModal()" class="text-xs bg-slate-700 hover:bg-sky-600 text-slate-200 px-2.5 rounded transition flex-shrink-0 font-bold flex items-center justify-center leading-none" title="Treemap text style">Aa</button>
+                        <button onclick="openColorModal()" class="text-xs bg-slate-700 hover:bg-amber-600 text-slate-200 px-2.5 rounded transition flex-shrink-0 flex items-center justify-center leading-none" title="Customize palette">🎨</button>
                     </div>
                 </div>
                 <span class="block text-[10px] text-slate-500 text-center">Filter · Text · Colors</span>
@@ -414,9 +427,10 @@
 
         function copyOfflineCommand() {
             const btn = document.getElementById("copy-script-btn");
+            const label = document.getElementById("copy-script-label");
             if (btn) {
                 btn.disabled = true;
-                btn.innerHTML = `<span>⏬ Downloading...</span>`;
+                if (label) label.textContent = "...";
             }
             const a = document.createElement("a");
             a.href = "/api/offline-script";
@@ -426,13 +440,13 @@
             document.body.removeChild(a);
             if (btn) {
                 setTimeout(() => {
-                    btn.innerHTML = `<span>✅ Download Started</span>`;
-                    btn.classList.add("bg-emerald-600");
-                    btn.classList.remove("bg-slate-700");
+                    if (label) label.textContent = "done";
+                    btn.classList.add("text-emerald-400");
+                    btn.classList.remove("text-white");
                     setTimeout(() => {
-                        btn.innerHTML = `<span>📥 Download Python Script</span>`;
-                        btn.classList.remove("bg-emerald-600");
-                        btn.classList.add("bg-slate-700");
+                        if (label) label.textContent = "script";
+                        btn.classList.remove("text-emerald-400");
+                        btn.classList.add("text-white");
                         btn.disabled = false;
                     }, 1400);
                 }, 150);
@@ -653,13 +667,13 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             function showSuccess() {
                 const btn = document.getElementById("copy-script-btn");
                 const originalText = btn.innerHTML;
-                btn.innerHTML = `<span>✅ Copied!</span>`;
-                btn.classList.add("bg-emerald-600");
-                btn.classList.remove("bg-slate-700");
+                btn.textContent = "Copied!";
+                btn.classList.add("text-emerald-400");
+                btn.classList.remove("text-white");
                 setTimeout(() => {
                     btn.innerHTML = originalText;
-                    btn.classList.remove("bg-emerald-600");
-                    btn.classList.add("bg-slate-700");
+                    btn.classList.remove("text-emerald-400");
+                    btn.classList.add("text-white");
                 }, 2000);
             }
 
@@ -707,7 +721,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             function handleMouseMove(e) {
                 if (!isResizingSidebar) return;
-                const containerRect = document.querySelector('.flex.flex-1').getBoundingClientRect();
+                const containerRect = document.getElementById("main-layout").getBoundingClientRect();
                 let newWidth = e.clientX - containerRect.left;
                 const minWidth = 200;
                 const maxWidth = Math.floor(window.innerWidth * 0.5);
@@ -776,6 +790,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             container: '#2e1065',
             snapshots: '#0f766e',
             sharedClone: '#0284c7',
+            chainSnapShare: '#6366f1',
             explicitReserve: '#14b8a6',
             thickProv: '#a855f7',
             otherVDisks: '#0369a1',
@@ -857,6 +872,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             renderTextStyleLegend();
             renderTextStylePresetList();
             updateTextStylePreview();
+            applyTooltipTextStyle();
         }
 
         function saveThemeTextStyle() {
@@ -865,6 +881,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             renderTextStyleLegend();
             renderTextStylePresetList();
             updateTextStylePreview();
+            applyTooltipTextStyle();
         }
 
         function applyTextStylePreset(presetId, redraw = true) {
@@ -951,6 +968,15 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     ${active ? '<span class="ml-auto text-sky-400 text-[10px] font-bold">ACTIVE</span>' : ''}
                 </button>`;
             }).join("");
+        }
+
+        function applyTooltipTextStyle() {
+            const tooltip = document.getElementById("floating-tooltip");
+            if (!tooltip) return;
+            const scale = Math.max(0.8, Math.min(1.4, (themeTextStyle.scale || 100) / 100));
+            tooltip.style.fontSize = `${12 * scale}px`;
+            tooltip.style.color = "";
+            tooltip.style.textShadow = "";
         }
 
         function updateTextStylePreview() {
@@ -1092,6 +1118,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 { key: "vg", label: "Volume Groups" },
                 { key: "snapshots", label: "Snapshots" },
                 { key: "sharedClone", label: "Shared VDisks" },
+                { key: "chainSnapShare", label: "Chain Snap Share" },
                 { key: "explicitReserve", label: "Reserved Available Space" },
                 { key: "thickProv", label: "Thick Provisioned" },
                 { key: "activeChain", label: "Active Chain" },
@@ -1114,6 +1141,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 vg: "Volume Groups",
                 snapshots: "Snapshots",
                 sharedClone: "Shared VDisks",
+                chainSnapShare: "Chain Snap Share",
                 explicitReserve: "Reserved Available Space",
                 thickProv: "Thick Provisioned",
                 activeChain: "Active Chain",
@@ -1170,11 +1198,13 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         }
 
         function getMappedEntityCategory(data) {
+            if (data && data.is_chain_snap_share_block) return "chainSnapShare";
             if (data && (data.is_shared_parent_vdisk || data.is_shared_clone_block)) return "sharedClone";
             const mapped = String((data && data.mapped_entity_name) || data.name || "");
             if (mapped.startsWith("VM:")) return "vm";
             if (mapped.startsWith("VG:")) return "vg";
             if (mapped === "Snapshots") return "snapshots";
+            if (mapped === "Chain Snap Share") return "chainSnapShare";
             if (mapped === "Shared Storage" || mapped.startsWith("Root VDisk-Chain-") || mapped.startsWith("Lineage ")) return "sharedClone";
             if (mapped === "Reserved Available Space") return "explicitReserve";
             if (mapped === "Recycle Bin") return "recycleBin";
@@ -1187,6 +1217,10 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const data = d.data;
             if (isActiveLineageHighlight(data)) return 'activeChain';
             if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return 'sharedClone';
+            if (data.is_chain_snap_share_block || data.name === "Chain Snap Share") {
+                if (data.is_chain_snap_share_block && activeChainId && String(data.chain_id) === String(activeChainId)) return 'activeChain';
+                return 'chainSnapShare';
+            }
             if (data.is_explicit_reserve_block || data.name === "Reserved Available Space") return 'explicitReserve';
             if (data.is_thick_prov_vdisk || data.is_thick_prov_block || data.name === "Thick Provisioned") return 'thickProv';
             if (data.is_shared_clone_block) {
@@ -1222,6 +1256,10 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         function getEntityColor(data) {
             if (isActiveLineageHighlight(data)) return themeColors.activeChain;
             if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return themeColors.sharedClone;
+            if (data.is_chain_snap_share_block || data.name === "Chain Snap Share") {
+                if (data.is_chain_snap_share_block && activeChainId && String(data.chain_id) === String(activeChainId)) return themeColors.activeChain;
+                return themeColors.chainSnapShare;
+            }
             if (data.is_explicit_reserve_block || data.name === "Reserved Available Space") return themeColors.explicitReserve;
             if (data.is_thick_prov_vdisk || data.is_thick_prov_block || data.name === "Thick Provisioned") return themeColors.thickProv;
             if (data.is_shared_clone_block) {
@@ -1249,6 +1287,9 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             let found = false;
             d3Node.each(n => {
                 if (n.data && isActiveLineageHighlight(n.data)) {
+                    found = true;
+                }
+                if (n.data && n.data.is_chain_snap_share_block && activeChainId && String(n.data.chain_id) === String(activeChainId)) {
                     found = true;
                 }
                 if (n.data && n.data.is_shared_clone_block) {
@@ -2043,13 +2084,13 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const fileForm = document.getElementById("offline-form");
 
             if (mode === 'ssh') {
-                sshBtn.className = "px-3 py-1 rounded bg-sky-500 text-white font-semibold transition";
-                fileBtn.className = "px-3 py-1 rounded text-slate-400 hover:text-white transition";
+                sshBtn.className = "px-3 h-full rounded text-sky-400 font-semibold transition flex items-center justify-center";
+                fileBtn.className = "px-3 h-full rounded text-white/90 hover:text-white transition flex items-center justify-center";
                 sshForm.classList.remove("hidden");
                 fileForm.classList.add("hidden");
             } else {
-                fileBtn.className = "px-3 py-1 rounded bg-emerald-500 text-white font-semibold transition";
-                sshBtn.className = "px-3 py-1 rounded text-slate-400 hover:text-white transition";
+                fileBtn.className = "px-3 h-full rounded text-emerald-400 font-semibold transition flex items-center justify-center";
+                sshBtn.className = "px-3 h-full rounded text-white/90 hover:text-white transition flex items-center justify-center";
                 fileForm.classList.remove("hidden");
                 sshForm.classList.add("hidden");
             }
@@ -2082,6 +2123,14 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const savedIp = localStorage.getItem("vdisk_sniffer_ip");
             if (savedIp) document.getElementById("cvm_ip").value = savedIp;
         });
+
+        function onOfflineFileSelected() {
+            const fileInput = document.getElementById("offline_file");
+            const label = document.getElementById("offline-file-label");
+            if (!label) return;
+            const file = fileInput && fileInput.files && fileInput.files[0];
+            label.textContent = file ? file.name : "Upload file";
+        }
 
         async function uploadOfflineFile(event) {
             event.preventDefault();
@@ -2309,6 +2358,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (d3Node.data.name.startsWith("VM:")) return "🖥️";
             if (d3Node.data.name.startsWith("VG:")) return "⛁";
             if (d3Node.data.is_shared_clone_block || d3Node.data.name === "Shared Clones") return "🔗";
+            if (d3Node.data.is_chain_snap_share_block || d3Node.data.name === "Chain Snap Share") return "📎";
             if (d3Node.data.name.includes("to_remove") || d3Node.data.is_to_remove) return "🗑️";
             if (d3Node.data.name === "Snapshots") return "📁";
             if (d3Node.data.name.includes("Other VDisks")) return "🗂️";
@@ -2318,7 +2368,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         function getDisplayNodeName(info) {
             const baseName = (info && info.name) ? info.name : "n/a";
-            const isContainerLike = info && info.children && !info.vdisk_id && !info.is_shared_clone_block;
+            const isContainerLike = info && info.children && !info.vdisk_id && !info.is_shared_clone_block && !info.is_chain_snap_share_block;
             const hasContainerId = info && info.container_id !== undefined && info.container_id !== null && String(info.container_id).trim() !== "";
             if (isContainerLike && hasContainerId) {
                 return `${baseName} (ID: ${info.container_id})`;
@@ -2436,8 +2486,9 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     const isChainBlockRoot = n.data.is_shared_clone_block && activeChainId && String(n.data.chain_id) === String(activeChainId);
                     const isChainBlockMember = n.data.is_shared_clone_block && n.data.member_chain_ids && activeChainId && n.data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
                     const isChainBlockActiveMember = n.data.is_shared_clone_block && n.data.chain_id && activeMemberChainIds.has(String(n.data.chain_id));
+                    const isSnapShareBlock = n.data.is_chain_snap_share_block && activeChainId && String(n.data.chain_id) === String(activeChainId);
 
-                    if ((isLineageMember || isChainBlockRoot || isChainBlockMember || isChainBlockActiveMember) && n.treeRowId) {
+                    if ((isLineageMember || isChainBlockRoot || isChainBlockMember || isChainBlockActiveMember || isSnapShareBlock) && n.treeRowId) {
                         const row = document.getElementById(n.treeRowId);
                         if (row) {
                             row.classList.add("bg-amber-500/20", "border-amber-400", "text-amber-300");
@@ -2650,7 +2701,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 else canvas.style.cursor = "pointer";
             } else canvas.style.cursor = "default";
 
-            if (found && (found.data.vdisk_id || found.data.is_shared_clone_block || found.data.is_shared_parent_vdisk)) {
+            if (found && (found.data.vdisk_id || found.data.is_shared_clone_block || found.data.is_shared_parent_vdisk || found.data.is_chain_snap_share_block)) {
                 if (found !== lastHoveredNode) {
                     lastHoveredNode = found;
                     drawCanvasState(); 
@@ -2792,20 +2843,22 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 const isExactChainBlockRoot = d.data.is_shared_clone_block && activeChainId && String(d.data.chain_id) === String(activeChainId);
                 const isExactChainBlockMember = d.data.is_shared_clone_block && d.data.member_chain_ids && activeChainId && d.data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
                 const isExactChainBlockActiveMember = d.data.is_shared_clone_block && d.data.chain_id && activeMemberChainIds.has(String(d.data.chain_id));
+                const isExactSnapShareBlock = d.data.is_chain_snap_share_block && activeChainId && String(d.data.chain_id) === String(activeChainId);
                 const isExactSharedParentBlock = d.data.is_shared_parent_vdisk && isActiveLineageHighlight(d.data);
 
-                const isHighlight = isExactChainLeaf || isExactChainBlockRoot || isExactChainBlockMember || isExactChainBlockActiveMember || isExactSharedParentBlock;
+                const isHighlight = isExactChainLeaf || isExactChainBlockRoot || isExactChainBlockMember || isExactChainBlockActiveMember || isExactSnapShareBlock || isExactSharedParentBlock;
                 const containsChainVDisk = !isHighlight && nodeContainsChainVDisk(d);
                 const isPrimarySelected = (() => {
                     if (!selectedNodeSignature || !d || !d.data) return false;
                     const sig = selectedNodeSignature;
                     if (sig.type === "vdisk") return d.data.vdisk_id !== undefined && d.data.vdisk_id !== null && String(d.data.vdisk_id) === sig.id;
                     if (sig.type === "shared_block") return !!d.data.is_shared_clone_block && String(d.data.chain_id || "") === sig.chainId;
+                    if (sig.type === "chain_snap_share") return !!d.data.is_chain_snap_share_block && String(d.data.chain_id || "") === sig.chainId;
                     if (sig.type === "shared_parent") {
                         if (sig.lineageId) return !!d.data.is_shared_parent_vdisk && resolveNodeLineageId(d.data) === sig.lineageId;
                         return !!d.data.is_shared_parent_vdisk && String(d.data.chain_id || "") === sig.chainId;
                     }
-                    if (sig.type === "group") return !d.data.vdisk_id && !d.data.is_shared_clone_block && !d.data.is_shared_parent_vdisk && String(d.data.name || "") === sig.name;
+                    if (sig.type === "group") return !d.data.vdisk_id && !d.data.is_shared_clone_block && !d.data.is_shared_parent_vdisk && !d.data.is_chain_snap_share_block && String(d.data.name || "") === sig.name;
                     return false;
                 })();
 
@@ -2841,12 +2894,6 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     ctx.shadowColor = "rgba(251, 191, 36, 0.35)";
                     ctx.shadowBlur = 6;
                     ctx.strokeRect(d.x0 + 1, d.y0 + 1, w - 2, h - 2);
-                } else if (containsChainVDisk) {
-                    ctx.lineWidth = 2;
-                    ctx.strokeStyle = "rgba(245, 158, 11, 0.78)";
-                    ctx.setLineDash([4, 4]);
-                    ctx.strokeRect(d.x0 + 1, d.y0 + 1, w - 2, h - 2);
-                    ctx.setLineDash([]);
                 } else {
                     ctx.lineWidth = 1;
                     ctx.strokeStyle = d.children ? "rgba(255, 255, 255, 0.4)" : "rgba(255, 255, 255, 0.15)";
@@ -2963,13 +3010,26 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             let html = `<div class="font-bold text-sky-400 border-b border-slate-700 pb-1 mb-1 break-all">${getDisplayNodeName(info)}</div>`;
 
-            if (info.is_shared_clone_block) {
+            if (info.is_chain_snap_share_block) {
+                const terms = info.snap_share_formula_terms || {};
                 html += `
-                    <div><span class="text-slate-400">Root Chain ID:</span> <span class="font-mono text-slate-200 text-[10px] break-all">${info.chain_id || "n/a"}</span></div>
+                    <div><span class="text-slate-400">Chain ID:</span> <span class="font-mono text-slate-200 text-[0.85em] break-all">${info.chain_id || info.name || "n/a"}</span></div>
+                    <div><span class="text-slate-400">Chain Snap Share:</span> <span class="text-amber-300 font-bold">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
+                    <div class="mt-1 pt-1 border-t border-slate-700/50 space-y-0.5">
+                        <div><span class="text-slate-400">Logical Live:</span> <span class="text-sky-300 font-bold">${formatBytes(terms.logical_live || 0)}</span></div>
+                        <div><span class="text-slate-400">Logical Shared Clone:</span> <span class="text-emerald-300 font-bold">${formatBytes(terms.logical_shared_clone || 0)}</span></div>
+                        <div><span class="text-slate-400">Logical Exclusive:</span> <span class="text-slate-200 font-bold">${formatBytes(terms.logical_exclusive || 0)}</span></div>
+                        <div><span class="text-slate-400">VDisk Exclusive Sum:</span> <span class="text-slate-200 font-bold">${formatBytes(terms.exclusive_sum || 0)}</span></div>
+                    </div>
+                    <div class="mt-1 pt-1 border-t border-slate-700/50"><span class="text-slate-400">VDisks in Chain:</span> <span class="font-mono text-slate-200 font-bold">${info.vdisk_ids ? info.vdisk_ids.length : 0}</span></div>
+                `;
+            } else if (info.is_shared_clone_block) {
+                html += `
+                    <div><span class="text-slate-400">Root Chain ID:</span> <span class="font-mono text-slate-200 text-[0.85em] break-all">${info.chain_id || "n/a"}</span></div>
                     <div><span class="text-slate-400">Total Phys Overhead:</span> <span class="text-amber-300 font-bold">${info.formatted_size}</span></div>
                     <div class="mt-1 pt-1 border-t border-slate-700/50 space-y-0.5">
-                        <div><span class="text-slate-400 text-[10px]">Total Phys PEG:</span> <span class="text-emerald-300 font-bold text-[10px]">${info.formatted_total_peg || info.formatted_max_peg || "0 KiB"}</span></div>
-                        <div><span class="text-slate-400 text-[10px]">Max Log Clone:</span> <span class="text-sky-300 font-bold text-[10px]">${info.formatted_logical_clone} <span class="text-slate-500 font-normal">(Est Phys: ${info.formatted_physical_clone || formatBytes(info.logical_clone_bytes ? info.logical_clone_bytes * 2 : 0)})</span></span></div>
+                        <div><span class="text-slate-400 text-[0.85em]">Total Phys PEG:</span> <span class="text-emerald-300 font-bold text-[0.85em]">${info.formatted_total_peg || info.formatted_max_peg || "0 KiB"}</span></div>
+                        <div><span class="text-slate-400 text-[0.85em]">Max Log Clone:</span> <span class="text-sky-300 font-bold text-[0.85em]">${info.formatted_logical_clone} <span class="text-slate-500 font-normal">(Est Phys: ${info.formatted_physical_clone || formatBytes(info.logical_clone_bytes ? info.logical_clone_bytes * 2 : 0)})</span></span></div>
                     </div>
                     <div class="mt-1 pt-1 border-t border-slate-700/50"><span class="text-slate-400">Member Chains:</span> <span class="font-mono text-slate-200 font-bold">${info.member_chain_ids ? info.member_chain_ids.length : 0}</span></div>
                     <div><span class="text-slate-400">VDisks in Family:</span> <span class="font-mono text-slate-200 font-bold">${info.vdisk_ids ? info.vdisk_ids.length : 0}</span></div>
@@ -3006,7 +3066,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     <div><span class="text-slate-400">Group Type:</span> <span class="text-slate-200 font-bold">${isVmGroup ? "Virtual Machine" : "Volume Group"}</span></div>
                     <div><span class="text-slate-400">Member VDisks:</span> <span class="text-emerald-300 font-bold">${leafRows.length}</span></div>
                     <div><span class="text-slate-400">Total Provisioned:</span> <span class="text-emerald-300 font-bold">${formatBytes(totalProvisionBytes)}</span></div>
-                    <div class="mt-1 pt-1 border-t border-slate-700/50 text-[10px] text-slate-300 max-h-48 overflow-y-auto pr-1">
+                    <div class="mt-1 pt-1 border-t border-slate-700/50 text-[0.85em] text-slate-300 max-h-48 overflow-y-auto pr-1">
                         ${leafRows.length ? leafRows.map((row, idx) => `
                             <div class="flex justify-between items-center py-0.5">
                                 <span>${idx + 1}. ${row.id}</span>
@@ -3021,9 +3081,9 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 if (vdiskSizeSum > 0 || info.vdisk_size !== undefined) html += `<div><span class="text-slate-400">Provisioned Size:</span> <span class="text-emerald-300 font-bold">${formatBytes(vdiskSizeSum)}</span></div>`;
             }
 
-            if (info.vdisk_id || (!info.children && !info.is_shared_clone_block)) {
+            if (info.vdisk_id || (!info.children && !info.is_shared_clone_block && !info.is_chain_snap_share_block)) {
                 html += `
-                    <div class="text-[10px] text-slate-300 space-y-0.5 mt-1 border-t border-slate-800 pt-1">
+                    <div class="text-[0.85em] text-slate-300 space-y-0.5 mt-1 border-t border-slate-800 pt-1">
                         <div><span class="text-slate-400">VDisk ID:</span> ${info.vdisk_id || "n/a"}</div>
                         <div><span class="text-slate-400">Chain ID:</span> ${info.chain_id || "n/a"}</div>
                         <div><span class="text-slate-400">Parent VDisk ID:</span> ${info.parent_vdisk_id || "n/a"}</div>
@@ -3034,13 +3094,14 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 `;
 
                 if (info.chain_info && Array.isArray(info.chain_info) && info.chain_info.length > 0) {
-                    html += `<div class="text-[10px] text-amber-300 font-semibold mt-1 border-t border-slate-800 pt-0.5">🔀 Exists in ${info.chain_info.length} Snapshot Trees</div>`;
+                    html += `<div class="text-[0.85em] text-amber-300 font-semibold mt-1 border-t border-slate-800 pt-0.5">Exists in ${info.chain_info.length} Snapshot Trees</div>`;
                 }
             }
 
-            if (info.is_to_remove) html += `<div class="text-[10px] text-rose-300 font-semibold mt-0.5">Status: Pending Curator Deletion</div>`;
+            if (info.is_to_remove) html += `<div class="text-[0.85em] text-rose-300 font-semibold mt-0.5">Status: Pending Curator Deletion</div>`;
 
             tooltip.innerHTML = html;
+            applyTooltipTextStyle();
             tooltip.classList.remove("hidden");
             moveFloatingTooltip(event);
         }
@@ -3216,6 +3277,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     nd.vdisk_id !== null &&
                     !nd.is_shared_parent_vdisk &&
                     !nd.is_shared_clone_block &&
+                    !nd.is_chain_snap_share_block &&
                     !Array.isArray(nd.children);
                 if (isRealVdiskLeaf && String(nd.chain_id || "") === cid) {
                     const exclusiveBytes = Number(
@@ -3379,6 +3441,8 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 selectedNodeSignature = { type: "vdisk", id: String(info.vdisk_id) };
             } else if (info.is_shared_clone_block) {
                 selectedNodeSignature = { type: "shared_block", chainId: String(info.chain_id || "") };
+            } else if (info.is_chain_snap_share_block) {
+                selectedNodeSignature = { type: "chain_snap_share", chainId: String(info.chain_id || "") };
             } else if (info.is_shared_parent_vdisk) {
                 selectedNodeSignature = {
                     type: "shared_parent",
@@ -3394,6 +3458,8 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             if (info.is_shared_clone_block || info.is_shared_parent_vdisk) {
                 applyActiveSharedChainBlockHighlight(info);
+            } else if (info.is_chain_snap_share_block) {
+                applyActiveLineageFromNodeData(info);
             } else if (info.vdisk_id || info.chain_id || (info.chain_info && Array.isArray(info.chain_info))) {
                 applyActiveLineageFromNodeData(info);
             }
@@ -3403,6 +3469,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             let nodeTypeLabel = info.is_free ? 'Free Storage Space' :
                 info.is_to_remove ? 'Pending Deletion VDisk' :
                 info.is_shared_clone_block ? 'Shared Clone / Snapshot Block' :
+                info.is_chain_snap_share_block ? 'Chain Snap Share Block' :
                 info.is_shared_parent_vdisk ? 'Parent Shared Node' :
                 info.children ? 'Container / Entity Group' : 'VDisk Leaf';
             if (info.is_dummy_lineage_root) {
@@ -3427,6 +3494,9 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
                 if (info.name === "Shared Clones") {
                     fieldsHtml += `<div><span class="text-slate-400">Total Chain IDs:</span> <span class="font-mono text-slate-200 font-bold">${totalChainIds}</span></div>`;
+                } else if (info.name === "Chain Snap Share") {
+                    const snapCount = d.leaves().filter(leaf => leaf.data.is_chain_snap_share_block).length;
+                    fieldsHtml += `<div><span class="text-slate-400">Chain Snap Share Blocks:</span> <span class="font-mono text-slate-200 font-bold">${snapCount}</span></div>`;
                 } else {
                     if (totalVdisks > 0) fieldsHtml += `<div><span class="text-slate-400">Total VDisks:</span> <span class="font-mono text-slate-200 font-bold">${totalVdisks}</span></div>`;
                     if (totalChainIds > 0) fieldsHtml += `<div><span class="text-slate-400">Total Shared Chain IDs:</span> <span class="font-mono text-slate-200 font-bold">${totalChainIds}</span></div>`;
@@ -3479,7 +3549,38 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 }
             }
 
-            if (info.is_shared_clone_block) {
+            if (info.is_chain_snap_share_block) {
+                const terms = info.snap_share_formula_terms || {};
+                fieldsHtml += `
+                    <div class="mt-2 p-2.5 bg-slate-950/70 border border-indigo-500/40 rounded-lg space-y-1.5 font-sans">
+                        <div class="text-xs font-bold text-indigo-300 border-b border-slate-800 pb-1">Chain Snap Share</div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Chain ID:</span> <span class="font-mono text-slate-200 text-[10px] break-all">${valOrNa(info.chain_id || info.name)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Snap Share:</span> <span class="font-mono text-amber-300 font-bold text-xs">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Logical Live:</span> <span class="font-mono text-sky-300 font-bold">${formatBytes(terms.logical_live || 0)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Logical Shared Clone:</span> <span class="font-mono text-emerald-300 font-bold">${formatBytes(terms.logical_shared_clone || 0)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Logical Exclusive:</span> <span class="font-mono text-slate-200 font-bold">${formatBytes(terms.logical_exclusive || 0)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">VDisk Exclusive Sum:</span> <span class="font-mono text-slate-200 font-bold">${formatBytes(terms.exclusive_sum || 0)}</span></div>
+                        ${info.snap_share_formula_source ? `<div class="flex justify-between items-center"><span class="text-slate-400">Formula:</span> <span class="font-mono text-cyan-300 text-[10px]">${valOrNa(info.snap_share_formula_source)}</span></div>` : ""}
+                        <div class="text-[10px] text-slate-500">(live - clone) × 2 − exclusive sum</div>
+                        <div class="mt-2 pt-2 border-t border-slate-800 space-y-1">
+                            <div class="text-[10px] text-slate-400 font-medium">VDisks in this chain:</div>
+                            <div class="space-y-1 max-h-36 overflow-y-auto pr-1">
+                `;
+                if (info.vdisk_ids && info.vdisk_ids.length > 0) {
+                    info.vdisk_ids.forEach((vdId, idx) => {
+                        fieldsHtml += `
+                            <button onclick="selectChainVDisk('${vdId}')"
+                                    class="w-full text-left px-2 py-1 rounded border flex items-center justify-between font-mono text-[10px] bg-slate-800 hover:bg-sky-600 text-slate-200 border-slate-700 transition">
+                                <span>${idx + 1}. ${vdId}</span>
+                                <span class="text-[9px] text-sky-300">Click to view</span>
+                            </button>
+                        `;
+                    });
+                } else {
+                    fieldsHtml += `<div class="text-slate-500 text-[10px] italic">No associated VDisks found</div>`;
+                }
+                fieldsHtml += `</div></div></div>`;
+            } else if (info.is_shared_clone_block) {
                 const totalChainIds = info.member_chain_ids ? info.member_chain_ids.length : 0;
                 fieldsHtml += `<div><span class="text-slate-400">Total Chain IDs:</span> <span class="font-mono text-slate-200 font-bold">${totalChainIds}</span></div>
                     <div class="mt-2 p-2.5 bg-slate-950/70 border border-sky-500/40 rounded-lg space-y-1.5 font-sans">
