@@ -397,8 +397,9 @@ def process_container_centric_logs(sections: dict):
             shared_bytes = 0
             source = "single_vdisk_zero_clone_no_shared"
         else:
-            shared_bytes = (logical_live * 2) + physical_peg - exclusive_sum
-            source = "snapshot_chain_live2_peg_minus_exclusive_sum"
+            # Snapshot-chain leftover is owned by Chain Snap Share; do not count it here.
+            shared_bytes = 0
+            source = "zero_clone_use_chain_snap_share"
         payload = {
             "shared_bytes": int(shared_bytes),
             "source": source,
@@ -1176,8 +1177,9 @@ def process_container_chain_graph_logs(sections: dict):
             shared_bytes = 0
             source = "single_vdisk_zero_clone_no_shared"
         else:
-            shared_bytes = (logical_live * 2) + physical_peg - exclusive_sum
-            source = "snapshot_chain_live2_peg_minus_exclusive_sum"
+            # Snapshot-chain leftover is owned by Chain Snap Share; do not count it here.
+            shared_bytes = 0
+            source = "zero_clone_use_chain_snap_share"
         return {
             "logical_live": logical_live,
             "logical_shared_clone": logical_clone,
@@ -1772,8 +1774,9 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
             shared_size = 0
             shared_formula_source = "single_vdisk_zero_clone_no_shared"
         else:
-            shared_size = (logical_live * 2) + physical_peg - exclusive_sum
-            shared_formula_source = "snapshot_chain_live2_peg_minus_exclusive_sum"
+            # Snapshot-chain leftover is owned by Chain Snap Share; do not count it here.
+            shared_size = 0
+            shared_formula_source = "zero_clone_use_chain_snap_share"
         if shared_size <= 0:
             continue
 
