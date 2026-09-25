@@ -167,6 +167,14 @@
                     <span class="text-slate-300 font-medium">Active Chain Highlight</span>
                     <input type="color" id="picker-activeChain" onchange="updateColorFromPicker('activeChain', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Partial Extents</span>
+                    <input type="color" id="picker-partialExtents" onchange="updateColorFromPicker('partialExtents', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Total Garbage w/o PEG</span>
+                    <input type="color" id="picker-totalGarbage" onchange="updateColorFromPicker('totalGarbage', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
             </div>
 
             <div class="flex justify-between items-center pt-3 border-t border-slate-800 text-xs">
@@ -641,6 +649,10 @@ print("[5/7] Querying curator chain usage...")
 t0 = time.time()
 curator_chain_out = run_curator_chain_usage(raw_chain_ids, chunk_size=CURATOR_CHAIN_CHUNK)
 collector_timing["curator_chain_sec"] = round(time.time() - t0, 3)
+print("[5b/7] Querying curator garbage report...")
+t0 = time.time()
+curator_garbage_out = run_binary("curator_cli display_garbage_report", timeout_sec=180)
+collector_timing["curator_garbage_sec"] = round(time.time() - t0, 3)
 collector_timing["container_count"] = len(container_names)
 collector_timing["vdisk_count"] = len(raw_vdisk_ids)
 collector_timing["chain_count"] = len(raw_chain_ids)
@@ -660,6 +672,7 @@ with open(out_filename, "w") as f:
     f.write("===NFS_LS_START===\n" + nfs_ls_out + "\n")
     f.write("===CURATOR_START===\n" + curator_out + "\n")
     f.write("===CURATOR_CHAIN_USAGE_START===\n" + curator_chain_out + "\n")
+    f.write("===CURATOR_GARBAGE_START===\n" + curator_garbage_out + "\n")
     f.write("===COLLECTOR_TIMING_START===\n" + json.dumps(collector_timing) + "\n")
 
 print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
@@ -785,17 +798,19 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             freeSpace: '#2d5a27',
             pendingDeletion: '#881337',
             recycleBin: '#b45309',
-            vm: '#1e3a8a',
+            vm: '#937f53',
             vg: '#581c87',
             container: '#2e1065',
             snapshots: '#0f766e',
             sharedClone: '#0284c7',
             chainSnapShare: '#6366f1',
             explicitReserve: '#14b8a6',
-            thickProv: '#a855f7',
+            thickProv: '#31af40',
             otherVDisks: '#0369a1',
             vdisk: '#3f5765',
-            activeChain: '#f59e0b'
+            activeChain: '#f59e0b',
+            partialExtents: '#db2777',
+            totalGarbage: '#71717a'
         };
 
         let themeColors = { ...defaultThemeColors };
@@ -1122,6 +1137,8 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 { key: "explicitReserve", label: "Reserved Available Space" },
                 { key: "thickProv", label: "Thick Provisioned" },
                 { key: "activeChain", label: "Active Chain" },
+                { key: "partialExtents", label: "Partial Extents" },
+                { key: "totalGarbage", label: "Total Garbage w/o PEG" },
             ];
             menu.innerHTML = items.map(({ key, label }) => {
                 const color = key ? (themeColors[key] || "#cbd5e1") : "#cbd5e1";
@@ -1145,6 +1162,8 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 explicitReserve: "Reserved Available Space",
                 thickProv: "Thick Provisioned",
                 activeChain: "Active Chain",
+                partialExtents: "Partial Extents",
+                totalGarbage: "Total Garbage w/o PEG",
             };
             if (activeLegendFilter === "vdisk") activeLegendFilter = null;
             const activeColor = activeLegendFilter ? (themeColors[activeLegendFilter] || "#cbd5e1") : "#cbd5e1";
@@ -1198,6 +1217,8 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         }
 
         function getMappedEntityCategory(data) {
+            if (data && data.is_partial_extents_block) return "partialExtents";
+            if (data && data.is_total_garbage_block) return "totalGarbage";
             if (data && data.is_chain_snap_share_block) return "chainSnapShare";
             if (data && (data.is_shared_parent_vdisk || data.is_shared_clone_block)) return "sharedClone";
             const mapped = String((data && data.mapped_entity_name) || data.name || "");
@@ -1205,6 +1226,8 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (mapped.startsWith("VG:")) return "vg";
             if (mapped === "Snapshots") return "snapshots";
             if (mapped === "Chain Snap Share") return "chainSnapShare";
+            if (mapped === "Partial Extents") return "partialExtents";
+            if (mapped === "Total Garbage w/o PEG") return "totalGarbage";
             if (mapped === "Shared Storage" || mapped.startsWith("Root VDisk-Chain-") || mapped.startsWith("Lineage ")) return "sharedClone";
             if (mapped === "Reserved Available Space") return "explicitReserve";
             if (mapped === "Recycle Bin") return "recycleBin";
@@ -1221,6 +1244,8 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 if (data.is_chain_snap_share_block && activeChainId && String(data.chain_id) === String(activeChainId)) return 'activeChain';
                 return 'chainSnapShare';
             }
+            if (data.is_partial_extents_block || data.name === "Partial Extents") return 'partialExtents';
+            if (data.is_total_garbage_block || data.name === "Total Garbage w/o PEG") return 'totalGarbage';
             if (data.is_explicit_reserve_block || data.name === "Reserved Available Space") return 'explicitReserve';
             if (data.is_thick_prov_vdisk || data.is_thick_prov_block || data.name === "Thick Provisioned") return 'thickProv';
             if (data.is_shared_clone_block) {
@@ -1260,6 +1285,8 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 if (data.is_chain_snap_share_block && activeChainId && String(data.chain_id) === String(activeChainId)) return themeColors.activeChain;
                 return themeColors.chainSnapShare;
             }
+            if (data.is_partial_extents_block || data.name === "Partial Extents") return themeColors.partialExtents;
+            if (data.is_total_garbage_block || data.name === "Total Garbage w/o PEG") return themeColors.totalGarbage;
             if (data.is_explicit_reserve_block || data.name === "Reserved Available Space") return themeColors.explicitReserve;
             if (data.is_thick_prov_vdisk || data.is_thick_prov_block || data.name === "Thick Provisioned") return themeColors.thickProv;
             if (data.is_shared_clone_block) {
@@ -2368,7 +2395,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         function getDisplayNodeName(info) {
             const baseName = (info && info.name) ? info.name : "n/a";
-            const isContainerLike = info && info.children && !info.vdisk_id && !info.is_shared_clone_block && !info.is_chain_snap_share_block;
+            const isContainerLike = info && info.children && !info.vdisk_id && !info.is_shared_clone_block && !info.is_chain_snap_share_block && !info.is_partial_extents_block && !info.is_total_garbage_block;
             const hasContainerId = info && info.container_id !== undefined && info.container_id !== null && String(info.container_id).trim() !== "";
             if (isContainerLike && hasContainerId) {
                 return `${baseName} (ID: ${info.container_id})`;
@@ -2701,7 +2728,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 else canvas.style.cursor = "pointer";
             } else canvas.style.cursor = "default";
 
-            if (found && (found.data.vdisk_id || found.data.is_shared_clone_block || found.data.is_shared_parent_vdisk || found.data.is_chain_snap_share_block)) {
+            if (found && (found.data.vdisk_id || found.data.is_shared_clone_block || found.data.is_shared_parent_vdisk || found.data.is_chain_snap_share_block || found.data.is_partial_extents_block || found.data.is_total_garbage_block || found.data.is_explicit_reserve_block)) {
                 if (found !== lastHoveredNode) {
                     lastHoveredNode = found;
                     drawCanvasState(); 
@@ -3010,7 +3037,19 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             let html = `<div class="font-bold text-sky-400 border-b border-slate-700 pb-1 mb-1 break-all">${getDisplayNodeName(info)}</div>`;
 
-            if (info.is_chain_snap_share_block) {
+            if (info.is_partial_extents_block) {
+                html += `
+                    <div><span class="text-slate-400">Container:</span> <span class="font-mono text-slate-200">${info.container_name || "n/a"}</span></div>
+                    <div><span class="text-slate-400">Partial Extents:</span> <span class="text-amber-300 font-bold">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
+                    <div class="text-[0.85em] text-slate-500 mt-1">Source: curator_cli display_garbage_report</div>
+                `;
+            } else if (info.is_total_garbage_block) {
+                html += `
+                    <div><span class="text-slate-400">Container:</span> <span class="font-mono text-slate-200">${info.container_name || "n/a"}</span></div>
+                    <div><span class="text-slate-400">Total Garbage w/o PEG:</span> <span class="text-amber-300 font-bold">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
+                    <div class="text-[0.85em] text-slate-500 mt-1">Source: curator_cli display_garbage_report</div>
+                `;
+            } else if (info.is_chain_snap_share_block) {
                 const terms = info.snap_share_formula_terms || {};
                 html += `
                     <div><span class="text-slate-400">Chain ID:</span> <span class="font-mono text-slate-200 text-[0.85em] break-all">${info.chain_id || info.name || "n/a"}</span></div>
@@ -3081,7 +3120,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 if (vdiskSizeSum > 0 || info.vdisk_size !== undefined) html += `<div><span class="text-slate-400">Provisioned Size:</span> <span class="text-emerald-300 font-bold">${formatBytes(vdiskSizeSum)}</span></div>`;
             }
 
-            if (info.vdisk_id || (!info.children && !info.is_shared_clone_block && !info.is_chain_snap_share_block)) {
+            if (info.vdisk_id || (!info.children && !info.is_shared_clone_block && !info.is_chain_snap_share_block && !info.is_partial_extents_block && !info.is_total_garbage_block)) {
                 html += `
                     <div class="text-[0.85em] text-slate-300 space-y-0.5 mt-1 border-t border-slate-800 pt-1">
                         <div><span class="text-slate-400">VDisk ID:</span> ${info.vdisk_id || "n/a"}</div>
@@ -3470,6 +3509,9 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 info.is_to_remove ? 'Pending Deletion VDisk' :
                 info.is_shared_clone_block ? 'Shared Clone / Snapshot Block' :
                 info.is_chain_snap_share_block ? 'Chain Snap Share Block' :
+                info.is_partial_extents_block ? 'Partial Extents Block' :
+                info.is_total_garbage_block ? 'Total Garbage w/o PEG Block' :
+                info.is_explicit_reserve_block ? 'Reserved Available Space Block' :
                 info.is_shared_parent_vdisk ? 'Parent Shared Node' :
                 info.children ? 'Container / Entity Group' : 'VDisk Leaf';
             if (info.is_dummy_lineage_root) {
@@ -3549,7 +3591,27 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 }
             }
 
-            if (info.is_chain_snap_share_block) {
+            if (info.is_partial_extents_block) {
+                fieldsHtml += `
+                    <div class="mt-2 p-2.5 bg-slate-950/70 border border-pink-500/40 rounded-lg space-y-1.5 font-sans">
+                        <div class="text-xs font-bold text-pink-300 border-b border-slate-800 pb-1">Partial Extents</div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Container:</span> <span class="font-mono text-slate-200">${valOrNa(info.container_name)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Container ID:</span> <span class="font-mono text-slate-200">${valOrNa(info.container_id)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Partial Extents:</span> <span class="font-mono text-amber-300 font-bold text-xs">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
+                        <div class="text-[10px] text-slate-500">Source: curator_cli display_garbage_report</div>
+                    </div>
+                `;
+            } else if (info.is_total_garbage_block) {
+                fieldsHtml += `
+                    <div class="mt-2 p-2.5 bg-slate-950/70 border border-stone-500/40 rounded-lg space-y-1.5 font-sans">
+                        <div class="text-xs font-bold text-stone-300 border-b border-slate-800 pb-1">Total Garbage w/o PEG</div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Container:</span> <span class="font-mono text-slate-200">${valOrNa(info.container_name)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Container ID:</span> <span class="font-mono text-slate-200">${valOrNa(info.container_id)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Total Garbage w/o PEG:</span> <span class="font-mono text-amber-300 font-bold text-xs">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
+                        <div class="text-[10px] text-slate-500">Source: curator_cli display_garbage_report</div>
+                    </div>
+                `;
+            } else if (info.is_chain_snap_share_block) {
                 const terms = info.snap_share_formula_terms || {};
                 fieldsHtml += `
                     <div class="mt-2 p-2.5 bg-slate-950/70 border border-indigo-500/40 rounded-lg space-y-1.5 font-sans">

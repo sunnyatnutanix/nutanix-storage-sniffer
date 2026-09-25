@@ -188,6 +188,10 @@ t0 = time.time()
 emit_progress(5, "Querying curator chain usage...")
 curator_chain_out = run_curator_chain_usage(raw_chain_ids, chunk_size=CURATOR_CHAIN_CHUNK)
 collector_timing["curator_chain_sec"] = round(time.time() - t0, 3)
+t0 = time.time()
+emit_progress(6, "Querying curator garbage report...")
+curator_garbage_out = run_binary("curator_cli display_garbage_report", timeout_sec=180)
+collector_timing["curator_garbage_sec"] = round(time.time() - t0, 3)
 collector_timing["container_count"] = len(container_names)
 collector_timing["vdisk_count"] = len(raw_vdisk_ids)
 collector_timing["chain_count"] = len(raw_chain_ids)
@@ -196,7 +200,7 @@ collector_timing["skip_nfs_ls"] = True
 collector_timing["collector_workers"] = {"curator": CURATOR_WORKERS}
 collector_timing["collector_chunk"] = {"vdisk": CURATOR_VDISK_CHUNK, "chain": CURATOR_CHAIN_CHUNK, "retry": CURATOR_RETRY_CHUNK}
 
-emit_progress(6, "Finalizing live scan output...")
+emit_progress(7, "Finalizing live scan output...")
 print("===VDISK_CFG_START===")
 print(vdisk_cfg)
 print("===NCLI_SP_START===")
@@ -211,9 +215,11 @@ print("===CURATOR_START===")
 print(curator_out)
 print("===CURATOR_CHAIN_USAGE_START===")
 print(curator_chain_out)
+print("===CURATOR_GARBAGE_START===")
+print(curator_garbage_out)
 print("===COLLECTOR_TIMING_START===")
 print(json.dumps(collector_timing))
-emit_progress(7, "DONE: live CVM scan complete.")
+emit_progress(8, "DONE: live CVM scan complete.")
 print("===COLLECTOR_OUTPUT_COMPLETE===")
 sys.stdout.flush()
 """
@@ -295,6 +301,7 @@ sys.stdout.flush()
                 "===NCLI_CTR_START===",
                 "===CURATOR_START===",
                 "===CURATOR_CHAIN_USAGE_START===",
+                "===CURATOR_GARBAGE_START===",
                 "===COLLECTOR_TIMING_START===",
                 "===COLLECTOR_OUTPUT_COMPLETE===",
             ]

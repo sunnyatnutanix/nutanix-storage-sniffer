@@ -197,6 +197,61 @@ def parse_curator_chain_usage(chain_log: str) -> dict:
                 }
     return chain_usage
 
+
+def parse_curator_garbage_report(garbage_log: str) -> dict:
+    """Parse ===CURATOR_GARBAGE_START=== into per-container partial extents and garbage bytes.
+
+    Stops at the 'addressed by Curator tasks' section. Matches container id_short keys.
+    """
+    garbage_map = {}
+    if not garbage_log:
+        return garbage_map
+
+    header_cols = None
+    for line in garbage_log.splitlines():
+        lower = line.lower()
+        if "addressed by curator tasks" in lower:
+            break
+        if "|" not in line or line.strip().startswith("+"):
+            continue
+        parts = [p.strip() for p in line.split("|") if p.strip()]
+        if not parts:
+            continue
+
+        # Capture column layout from the header row.
+        joined = " ".join(parts).lower()
+        if header_cols is None and "container" in joined and "partial" in joined:
+            header_cols = [p.lower() for p in parts]
+            continue
+        if not parts[0].isdigit():
+            continue
+
+        cid = parts[0]
+        partial_idx = None
+        garbage_idx = None
+        if header_cols:
+            for i, col in enumerate(header_cols):
+                if partial_idx is None and "partial" in col and "extent" in col:
+                    partial_idx = i
+                if garbage_idx is None and "garbage" in col and "peg" in col:
+                    garbage_idx = i
+                if garbage_idx is None and col.strip() in ("total garbage w/o peg", "total garbage without peg"):
+                    garbage_idx = i
+        # Fallback to awk field positions ($10/$11 after leading empty pipe field).
+        if partial_idx is None:
+            partial_idx = 8 if len(parts) > 8 else None
+        if garbage_idx is None:
+            garbage_idx = 9 if len(parts) > 9 else None
+
+        partial_bytes = parse_size_to_bytes(parts[partial_idx]) if partial_idx is not None and partial_idx < len(parts) else 0
+        garbage_bytes = parse_size_to_bytes(parts[garbage_idx]) if garbage_idx is not None and garbage_idx < len(parts) else 0
+        garbage_map[str(cid)] = {
+            "partial_extents_bytes": int(partial_bytes),
+            "total_garbage_wo_peg_bytes": int(garbage_bytes),
+        }
+    return garbage_map
+
+
 def parse_ncli_vms(ncli_vm_log: str) -> dict:
     def _extract_vm_vdisk_ids(vdisk_entry: str):
         ids = []

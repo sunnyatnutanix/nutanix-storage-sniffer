@@ -16,6 +16,7 @@ from app.parser import (
     parse_snapshot_tree_printer,
     parse_curator_usage,
     parse_curator_chain_usage,
+    parse_curator_garbage_report,
     parse_ncli_vms,
     parse_ncli_volume_groups,
     parse_ncli_storage_pool,
@@ -217,7 +218,7 @@ def extract_log_sections(raw_output: str) -> dict:
         "===VDISK_CFG_START===", "===NCLI_VM_START===", "===NCLI_VG_START===",
         "===NCLI_SP_START===", "===NCLI_CTR_START===", "===SNAPSHOT_TREE_START===",
         "===SNAPSHOT_TREE_CHAIN_IDS_START===", "===CURATOR_START===", "===CURATOR_CHAIN_USAGE_START===",
-        "===NFS_LS_START===", "===COLLECTOR_TIMING_START===",
+        "===CURATOR_GARBAGE_START===", "===NFS_LS_START===", "===COLLECTOR_TIMING_START===",
     ]
     sections = {h: "" for h in headers}
     found_headers = []
@@ -391,7 +392,7 @@ def process_container_centric_logs(sections: dict):
         chain_vdisk_ids = chain_to_vdisk_ids.get(chain_id, [])
         exclusive_sum = sum(int(curator_usage_map.get(str(vd_id), 0) or 0) for vd_id in chain_vdisk_ids)
         if logical_clone > 0:
-            shared_bytes = (logical_clone * 2) + physical_peg
+            shared_bytes = (logical_clone * 2)
             source = "curator_chain_x2"
         elif len(chain_vdisk_ids) <= 1:
             shared_bytes = 0
@@ -1130,6 +1131,7 @@ def process_container_chain_graph_logs(sections: dict):
     vgs = parse_ncli_volume_groups(sections.get("===NCLI_VG_START===", ""))
     usage_map = parse_curator_usage(sections.get("===CURATOR_START===", ""))
     chain_usage_map = parse_curator_chain_usage(sections.get("===CURATOR_CHAIN_USAGE_START===", ""))
+    garbage_map = parse_curator_garbage_report(sections.get("===CURATOR_GARBAGE_START===", ""))
     sp_info = parse_ncli_storage_pool(sections.get("===NCLI_SP_START===", ""))
 
     vm_by_vdisk_id = {}
@@ -1171,7 +1173,7 @@ def process_container_chain_graph_logs(sections: dict):
         physical_peg = int(stats.get("physical_peg", 0) or 0)
         exclusive_sum = sum(int(usage_map.get(str(vd_id), 0) or 0) for vd_id in chain_vdisk_ids)
         if logical_clone > 0:
-            shared_bytes = (logical_clone * 2) + physical_peg
+            shared_bytes = (logical_clone * 2)
             source = "curator_chain_x2"
         elif len(chain_vdisk_ids) <= 1:
             shared_bytes = 0
@@ -1575,6 +1577,42 @@ def process_container_chain_graph_logs(sections: dict):
                 "children": snap_share_nodes,
             })
 
+        garbage_info = garbage_map.get(str(container_id), {}) or {}
+        partial_extents_bytes = int(garbage_info.get("partial_extents_bytes", 0) or 0)
+        total_garbage_bytes = int(garbage_info.get("total_garbage_wo_peg_bytes", 0) or 0)
+        if partial_extents_bytes > 0:
+            container_children.append({
+                "name": "Partial Extents",
+                "aggregate_exclusive_bytes": partial_extents_bytes,
+                "formatted_size": format_bytes(partial_extents_bytes),
+                "children": [{
+                    "name": "Partial Extents",
+                    "is_partial_extents_block": True,
+                    "container_id": container_id,
+                    "container_name": cg.container_name,
+                    "value": partial_extents_bytes,
+                    "real_bytes": partial_extents_bytes,
+                    "formatted_size": format_bytes(partial_extents_bytes),
+                    "display_source": "curator_display_garbage_report",
+                }],
+            })
+        if total_garbage_bytes > 0:
+            container_children.append({
+                "name": "Total Garbage w/o PEG",
+                "aggregate_exclusive_bytes": total_garbage_bytes,
+                "formatted_size": format_bytes(total_garbage_bytes),
+                "children": [{
+                    "name": "Total Garbage w/o PEG",
+                    "is_total_garbage_block": True,
+                    "container_id": container_id,
+                    "container_name": cg.container_name,
+                    "value": total_garbage_bytes,
+                    "real_bytes": total_garbage_bytes,
+                    "formatted_size": format_bytes(total_garbage_bytes),
+                    "display_source": "curator_display_garbage_report",
+                }],
+            })
+
         explicit_res_bytes = int(c.get("explicit_res_logical_bytes", 0) or 0)
         explicit_res_scaled_bytes = explicit_res_bytes * cg.replication_factor
         other_total = c_total + shared_total + snap_share_total
@@ -1676,6 +1714,7 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
     ctr_map = parse_ncli_containers(sections.get("===NCLI_CTR_START===", ""))
     ctr_name_to_id = {v: k for k, v in ctr_map.items()}
     sp_info = parse_ncli_storage_pool(sections.get("===NCLI_SP_START===", ""))
+    garbage_map = parse_curator_garbage_report(sections.get("===CURATOR_GARBAGE_START===", ""))
 
 
     disk_uuid_to_vg = {}
@@ -1768,7 +1807,7 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
         chain_vdisks = set(c_node.get("vdisk_ids", []))
         exclusive_sum = sum(int(usage_map.get(str(vd_id), 0) or 0) for vd_id in chain_vdisks)
         if logical_clone > 0:
-            shared_size = (logical_clone * 2) + physical_peg
+            shared_size = (logical_clone * 2)
             shared_formula_source = "curator_chain_x2"
         elif len(chain_vdisks) <= 1:
             shared_size = 0
@@ -1915,6 +1954,33 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
         snap_share_blocks = container_snap_share_nodes.get(c_name, [])
         if snap_share_blocks:
             entities["Chain Snap Share"] = snap_share_blocks
+
+        c_id = ctr_name_to_id.get(c_name)
+        garbage_info = garbage_map.get(str(c_id), {}) or {} if c_id is not None else {}
+        partial_extents_bytes = int(garbage_info.get("partial_extents_bytes", 0) or 0)
+        total_garbage_bytes = int(garbage_info.get("total_garbage_wo_peg_bytes", 0) or 0)
+        if partial_extents_bytes > 0:
+            entities["Partial Extents"] = [{
+                "name": "Partial Extents",
+                "is_partial_extents_block": True,
+                "container_id": c_id,
+                "container_name": c_name,
+                "value": partial_extents_bytes,
+                "real_bytes": partial_extents_bytes,
+                "formatted_size": format_bytes(partial_extents_bytes),
+                "display_source": "curator_display_garbage_report",
+            }]
+        if total_garbage_bytes > 0:
+            entities["Total Garbage w/o PEG"] = [{
+                "name": "Total Garbage w/o PEG",
+                "is_total_garbage_block": True,
+                "container_id": c_id,
+                "container_name": c_name,
+                "value": total_garbage_bytes,
+                "real_bytes": total_garbage_bytes,
+                "formatted_size": format_bytes(total_garbage_bytes),
+                "display_source": "curator_display_garbage_report",
+            }]
 
         e_nodes = []
         for e_name, v_list in entities.items():
