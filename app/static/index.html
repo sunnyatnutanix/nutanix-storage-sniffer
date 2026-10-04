@@ -78,6 +78,33 @@
         #treemap-canvas {
             will-change: transform;
         }
+
+        /* Make datetime-local calendar trigger visible on dark backgrounds */
+        input[type="datetime-local"].time-dt-input {
+            color-scheme: dark;
+            min-width: 13.5rem;
+            padding-right: 0.35rem;
+        }
+
+        input[type="datetime-local"].time-dt-input::-webkit-calendar-picker-indicator {
+            cursor: pointer;
+            opacity: 1;
+            width: 1.15rem;
+            height: 1.15rem;
+            margin-left: 0.25rem;
+            padding: 0.2rem;
+            border-radius: 0.25rem;
+            background-color: #0ea5e9;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f172a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2'/%3E%3Cline x1='16' y1='2' x2='16' y2='6'/%3E%3Cline x1='8' y1='2' x2='8' y2='6'/%3E%3Cline x1='3' y1='10' x2='21' y2='10'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: 0.85rem 0.85rem;
+            filter: none;
+        }
+
+        input[type="datetime-local"].time-dt-input::-webkit-calendar-picker-indicator:hover {
+            background-color: #38bdf8;
+        }
         
         details > summary {
             list-style: none;
@@ -91,7 +118,7 @@
 
     <!-- Search Overlay Modal -->
     <div id="search-modal" onclick="closeSearchModal(event)" class="fixed inset-0 bg-slate-950/55 backdrop-blur-xs hidden z-[80] flex items-center justify-center p-4 transition-opacity duration-200">
-        <div onclick="event.stopPropagation()" class="bg-slate-900 border border-sky-500/50 rounded-xl p-6 w-full max-w-2xl shadow-2xl space-y-4 relative">
+        <div onclick="event.stopPropagation()" class="bg-slate-900 border border-sky-500/50 rounded-xl p-6 w-full max-w-3xl shadow-2xl space-y-4 relative max-h-[90vh] overflow-y-auto">
             <div class="flex justify-between items-center border-b border-slate-800 pb-3">
                 <div class="flex items-center space-x-2 text-sky-400 font-bold text-base">
                     <span>🔍</span>
@@ -108,8 +135,69 @@
                 <button onclick="clearSearch()" id="search-clear-btn" class="hidden absolute right-3 top-3 text-slate-400 hover:text-white text-xs font-mono bg-slate-800 px-2 py-1 rounded">Clear</button>
             </div>
 
+            <div class="border border-slate-800 rounded-lg bg-slate-950/50 p-3 space-y-3">
+                <div class="flex items-center justify-between">
+                    <div class="text-xs font-semibold text-slate-300">VDisk Creation time</div>
+                    <div class="flex items-center gap-1 text-[10px] font-mono">
+                        <button type="button" id="time-tab-basic" onclick="setTimeFilterTab('basic')" class="px-2 py-0.5 rounded border border-sky-500/60 bg-sky-900/40 text-sky-200">Basic</button>
+                        <button type="button" id="time-tab-advanced" onclick="setTimeFilterTab('advanced')" class="px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-400">Advanced</button>
+                    </div>
+                </div>
+
+                <div id="time-filter-basic" class="space-y-2">
+                    <div class="flex flex-wrap gap-1.5">
+                        <button type="button" onclick="applyRelativePreset(24, 'hours')" class="time-preset-chip px-2 py-1 rounded border border-slate-700 bg-slate-900 text-[11px] text-slate-300 hover:border-sky-500 hover:text-sky-200">Last 24 hours</button>
+                        <button type="button" onclick="applyRelativePreset(1, 'weeks')" class="time-preset-chip px-2 py-1 rounded border border-slate-700 bg-slate-900 text-[11px] text-slate-300 hover:border-sky-500 hover:text-sky-200">Last week</button>
+                        <button type="button" onclick="applyRelativePreset(1, 'months')" class="time-preset-chip px-2 py-1 rounded border border-slate-700 bg-slate-900 text-[11px] text-slate-300 hover:border-sky-500 hover:text-sky-200">Last month</button>
+                        <button type="button" onclick="applyRelativePreset(1, 'years')" class="time-preset-chip px-2 py-1 rounded border border-slate-700 bg-slate-900 text-[11px] text-slate-300 hover:border-sky-500 hover:text-sky-200">Last year</button>
+                        <button type="button" onclick="clearTimeFilterOnly()" class="time-preset-chip px-2 py-1 rounded border border-slate-700 bg-slate-900 text-[11px] text-slate-400 hover:border-slate-500">Any</button>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                        <span>Last</span>
+                        <input type="number" id="time-relative-amount" min="1" step="1" value="24" onkeydown="onSearchKeyDown(event)" class="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono focus:outline-none focus:border-sky-500">
+                        <select id="time-relative-unit" onkeydown="onSearchKeyDown(event)" class="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-sky-500">
+                            <option value="hours">hours</option>
+                            <option value="days">days</option>
+                            <option value="weeks">weeks</option>
+                            <option value="months">months</option>
+                            <option value="years">years</option>
+                        </select>
+                        <button type="button" onclick="applyRelativeCustom()" class="px-2 py-1 rounded bg-sky-700/80 hover:bg-sky-600 text-white text-[11px] font-semibold">Apply</button>
+                    </div>
+                </div>
+
+                <div id="time-filter-advanced" class="hidden space-y-2">
+                    <div class="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                        <span>Mode</span>
+                        <select id="time-advanced-mode" onchange="onAdvancedTimeModeChange()" class="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-slate-200 focus:outline-none focus:border-sky-500">
+                            <option value="after">After</option>
+                            <option value="before">Before</option>
+                            <option value="between">Between</option>
+                        </select>
+                        <button type="button" onclick="applyAdvancedTimeFilter()" class="px-2 py-1 rounded bg-sky-700/80 hover:bg-sky-600 text-white text-[11px] font-semibold">Apply</button>
+                    </div>
+                    <div id="time-advanced-after-row" class="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                        <span>After</span>
+                        <input type="datetime-local" id="time-after" onkeydown="onSearchKeyDown(event)" class="time-dt-input bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-slate-100 font-mono focus:outline-none focus:border-sky-500">
+                    </div>
+                    <div id="time-advanced-before-row" class="hidden flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                        <span>Before</span>
+                        <input type="datetime-local" id="time-before" onkeydown="onSearchKeyDown(event)" class="time-dt-input bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-slate-100 font-mono focus:outline-none focus:border-sky-500">
+                    </div>
+                    <div id="time-advanced-between-row" class="hidden flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
+                        <span>Start</span>
+                        <input type="datetime-local" id="time-start" onkeydown="onSearchKeyDown(event)" class="time-dt-input bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-slate-100 font-mono focus:outline-none focus:border-sky-500">
+                        <span>End</span>
+                        <input type="datetime-local" id="time-end" onkeydown="onSearchKeyDown(event)" class="time-dt-input bg-slate-900 border border-slate-600 rounded px-2 py-1.5 text-slate-100 font-mono focus:outline-none focus:border-sky-500">
+                    </div>
+                </div>
+
+                <p id="time-filter-summary" class="text-[10px] text-slate-500 font-mono"></p>
+            </div>
+
             <div class="text-[11px] text-slate-400 space-y-1">
                 <p>Matches: <b class="text-slate-200">VDisk ID, Parent VDisk ID, Chain ID, VDisk UUID, VDisk Name, NFS File Name, Container, VM Name, VG Name</b></p>
+                <p>Creation time filters use <b class="text-slate-200">vdisk_creation_time_usecs</b> (fallback <b class="text-slate-200">creation_time_usecs</b>) and combine with text via AND.</p>
                 <p id="search-stats" class="text-sky-400 font-mono"></p>
             </div>
         </div>
@@ -184,9 +272,9 @@
         </div>
     </div>
 
-    <!-- Treemap Text Style Legend Modal (OneClickKB-style presets) -->
+    <!-- Treemap Text Style Modal -->
     <div id="text-style-modal" onclick="closeTextStyleModal(event)" class="fixed inset-0 bg-slate-950/55 backdrop-blur-lg hidden z-[85] flex items-center justify-center p-4 transition-opacity duration-200">
-        <div onclick="event.stopPropagation()" class="bg-slate-900 border border-sky-500/50 rounded-xl p-6 w-full max-w-lg shadow-2xl space-y-4 relative">
+        <div onclick="event.stopPropagation()" class="bg-slate-900 border border-sky-500/50 rounded-xl p-6 w-full max-w-md shadow-2xl space-y-4 relative">
             <div class="flex justify-between items-center border-b border-slate-800 pb-3">
                 <div class="flex items-center space-x-2 text-sky-400 font-bold text-base">
                     <span>Aa</span>
@@ -195,13 +283,7 @@
                 <button onclick="closeTextStyleModal()" class="text-slate-400 hover:text-white font-bold text-sm">✕</button>
             </div>
 
-            <p class="text-[11px] text-slate-400">Choose a label style (OneClickKB-style white on color is the default). Changes apply live and save for next visit.</p>
-
-            <div class="grid grid-cols-1 gap-2 text-xs" id="text-style-preset-list">
-                <!-- filled by JS -->
-            </div>
-
-            <div class="grid grid-cols-2 gap-3 text-xs pt-1">
+            <div class="grid grid-cols-2 gap-3 text-xs">
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
                     <span class="text-slate-300 font-medium">Label Color</span>
                     <input type="color" id="picker-text-fill" onchange="updateTextStyleFromControls()" class="w-8 h-7 bg-transparent cursor-pointer rounded">
@@ -215,24 +297,15 @@
                 </div>
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800 col-span-2">
                     <span class="text-slate-300 font-medium">Text Size</span>
-                    <input type="range" id="picker-text-scale" min="80" max="140" step="5" value="100" oninput="updateTextStyleFromControls()" class="w-40 accent-sky-500">
-                    <span id="picker-text-scale-label" class="font-mono text-slate-400 w-10 text-right">100%</span>
+                    <input type="range" id="picker-text-scale" min="80" max="140" step="5" value="110" oninput="updateTextStyleFromControls()" class="w-40 accent-sky-500">
+                    <span id="picker-text-scale-label" class="font-mono text-slate-400 w-10 text-right">110%</span>
                 </div>
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800 col-span-2">
                     <span class="text-slate-300 font-medium">Dark Header Bar</span>
                     <label class="inline-flex items-center gap-2 text-slate-300">
-                        <input type="checkbox" id="picker-text-header-bar" onchange="updateTextStyleFromControls()" class="rounded border-slate-600">
+                        <input type="checkbox" id="picker-text-header-bar" onchange="updateTextStyleFromControls()" class="rounded border-slate-600" checked>
                         <span>Show on group labels</span>
                     </label>
-                </div>
-            </div>
-
-            <div class="rounded-lg border border-slate-700 overflow-hidden">
-                <div class="px-3 py-1.5 bg-slate-950 text-[10px] text-slate-500 uppercase tracking-wide">Preview</div>
-                <div id="text-style-preview" class="grid grid-cols-3 gap-0 text-center text-[11px] font-bold">
-                    <div class="py-4 px-2" style="background:#1e3a8a;color:#fff">VM Label</div>
-                    <div class="py-4 px-2" style="background:#166534;color:#fff">Shared Storage</div>
-                    <div class="py-4 px-2" style="background:#881337;color:#fff">182.67 GiB</div>
                 </div>
             </div>
 
@@ -410,6 +483,8 @@
         let currentHierarchyNode = null;
         let isAnimating = false;
         let activeSearchQuery = "";
+        let activeTimeFilter = null; // null | {kind:"relative",amount,unit} | {kind:"after"|"before"|"between",startMs?,endMs?}
+        let timeFilterTab = "basic";
         let nodeTreeRowMap = new Map();
         let activeChainId = null;
         let activeChainVDiskIds = new Set();
@@ -442,7 +517,7 @@
             }
             const a = document.createElement("a");
             a.href = "/api/offline-script";
-            a.download = "collect_offline_log.py";
+            a.download = "vdisk_sniffer.py";
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -578,7 +653,7 @@ CURATOR_CHAIN_CHUNK = max(1, get_int_env("CURATOR_CHAIN_CHUNK", 80 if FAST_MODE 
 CURATOR_RETRY_CHUNK = max(1, get_int_env("CURATOR_RETRY_CHUNK", 30 if FAST_MODE else 40))
 collector_timing = {}
 
-print("[1/7] Collecting core NCLI + vdisk metadata...")
+print("[1/8] Collecting core NCLI + vdisk metadata...")
 t0 = time.time()
 ncli_ctr = run_cmd("ncli container ls", timeout_sec=90)
 ncli_vm = run_cmd("ncli vm ls", timeout_sec=120)
@@ -587,7 +662,7 @@ ncli_sp = run_cmd("ncli storagepool ls", timeout_sec=60)
 vdisk_cfg = run_binary("vdisk_config_printer", timeout_sec=120)
 collector_timing["core_query_sec"] = round(time.time() - t0, 3)
 
-print("[2/7] Collecting per-container nfs_ls sections...")
+print("[2/8] Collecting per-container nfs_ls sections...")
 container_names = []
 for m in re.finditer(r"^\s*Name\s*:\s*([^\n]+)", ncli_ctr, re.MULTILINE):
     nm = m.group(1).strip()
@@ -612,7 +687,7 @@ else:
     nfs_ls_out = "\n".join([r[1] for r in nfs_rows])
     collector_timing["nfs_ls_sec"] = round(time.time() - t0, 3)
 
-print("[3/7] Parsing IDs for curator batching...")
+print("[3/8] Parsing IDs for curator batching...")
 raw_vdisk_ids = sorted(
     set(re.findall(r"^\s*vdisk_id\s*:\s*(\d+)", vdisk_cfg, re.MULTILINE)),
     key=lambda x: int(x),
@@ -641,15 +716,15 @@ def run_curator_chain_usage(chain_ids, chunk_size=120):
         retry_chunk_size=CURATOR_RETRY_CHUNK
     )
 
-print("[4/7] Querying curator vdisk usage...")
+print("[4/8] Querying curator vdisk usage...")
 t0 = time.time()
 curator_out = run_curator_vdisk_usage(raw_vdisk_ids, chunk_size=CURATOR_VDISK_CHUNK)
 collector_timing["curator_vdisk_sec"] = round(time.time() - t0, 3)
-print("[5/7] Querying curator chain usage...")
+print("[5/8] Querying curator chain usage...")
 t0 = time.time()
 curator_chain_out = run_curator_chain_usage(raw_chain_ids, chunk_size=CURATOR_CHAIN_CHUNK)
 collector_timing["curator_chain_sec"] = round(time.time() - t0, 3)
-print("[5b/7] Querying curator garbage report...")
+print("[6/8] Querying curator garbage report...")
 t0 = time.time()
 curator_garbage_out = run_binary("curator_cli display_garbage_report", timeout_sec=180)
 collector_timing["curator_garbage_sec"] = round(time.time() - t0, 3)
@@ -662,7 +737,7 @@ collector_timing["collector_workers"] = {"nfs": NFS_WORKERS, "curator": CURATOR_
 collector_timing["collector_chunk"] = {"vdisk": CURATOR_VDISK_CHUNK, "chain": CURATOR_CHAIN_CHUNK, "retry": CURATOR_RETRY_CHUNK}
 
 out_filename = "vdisk_sniffer_offline.log"
-print("[6/7] Writing output to %s..." % out_filename)
+print("[7/8] Writing output to %s..." % out_filename)
 with open(out_filename, "w") as f:
     f.write("===VDISK_CFG_START===\n" + vdisk_cfg + "\n")
     f.write("===NCLI_SP_START===\n" + ncli_sp + "\n")
@@ -675,7 +750,7 @@ with open(out_filename, "w") as f:
     f.write("===CURATOR_GARBAGE_START===\n" + curator_garbage_out + "\n")
     f.write("===COLLECTOR_TIMING_START===\n" + json.dumps(collector_timing) + "\n")
 
-print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
+print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             function showSuccess() {
                 const btn = document.getElementById("copy-script-btn");
@@ -815,53 +890,14 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         let themeColors = { ...defaultThemeColors };
 
-        const textStylePresets = {
-            oneclickkb: {
-                id: "oneclickkb",
-                label: "OneClickKB White",
-                hint: "Bold white on color",
-                fill: "#ffffff",
-                stroke: "rgba(0,0,0,0.45)",
-                strokeWidth: 2.5,
-                outline: false,
-                headerBar: false,
-                scale: 100,
-                sampleBg: "#5b21b6",
-            },
-            softGrey: {
-                id: "softGrey",
-                label: "Soft Grey",
-                hint: "Light grey labels",
-                fill: "#d1d5db",
-                stroke: "rgba(0,0,0,0.55)",
-                strokeWidth: 2.5,
-                outline: false,
-                headerBar: false,
-                scale: 100,
-                sampleBg: "#166534",
-            },
-            darkOutline: {
-                id: "darkOutline",
-                label: "Dark + Halo",
-                hint: "Best on bright greens",
-                fill: "#4b5563",
-                stroke: "rgba(255,255,255,0.92)",
-                strokeWidth: 3,
-                outline: true,
-                headerBar: true,
-                scale: 100,
-                sampleBg: "#1e3a8a",
-            },
-        };
-
         const defaultTextStyle = {
-            preset: "oneclickkb",
-            fill: textStylePresets.oneclickkb.fill,
-            stroke: textStylePresets.oneclickkb.stroke,
-            strokeWidth: textStylePresets.oneclickkb.strokeWidth,
-            outline: textStylePresets.oneclickkb.outline,
-            headerBar: textStylePresets.oneclickkb.headerBar,
-            scale: textStylePresets.oneclickkb.scale,
+            preset: "custom",
+            fill: "#ffffff",
+            stroke: "rgba(0,0,0,0.45)",
+            strokeWidth: 2.5,
+            outline: false,
+            headerBar: true,
+            scale: 110,
         };
 
         let themeTextStyle = { ...defaultTextStyle };
@@ -883,36 +919,16 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             } catch (e) {
                 themeTextStyle = { ...defaultTextStyle };
             }
+            if (themeTextStyle.scale === undefined || themeTextStyle.scale === null) themeTextStyle.scale = 110;
+            if (themeTextStyle.headerBar === undefined || themeTextStyle.headerBar === null) themeTextStyle.headerBar = true;
             syncTextStyleControls();
-            renderTextStyleLegend();
-            renderTextStylePresetList();
-            updateTextStylePreview();
             applyTooltipTextStyle();
         }
 
         function saveThemeTextStyle() {
             try { localStorage.setItem("vdisk_sniffer_text_style", JSON.stringify(themeTextStyle)); } catch (e) {}
             syncTextStyleControls();
-            renderTextStyleLegend();
-            renderTextStylePresetList();
-            updateTextStylePreview();
             applyTooltipTextStyle();
-        }
-
-        function applyTextStylePreset(presetId, redraw = true) {
-            const preset = textStylePresets[presetId];
-            if (!preset) return;
-            themeTextStyle = {
-                preset: preset.id,
-                fill: preset.fill,
-                stroke: preset.stroke,
-                strokeWidth: preset.strokeWidth,
-                outline: preset.outline,
-                headerBar: preset.headerBar,
-                scale: preset.scale,
-            };
-            saveThemeTextStyle();
-            if (redraw) drawCanvasState();
         }
 
         function openTextStyleModal() {
@@ -920,8 +936,6 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (!modal) return;
             modal.classList.remove("hidden");
             syncTextStyleControls();
-            renderTextStylePresetList();
-            updateTextStylePreview();
         }
 
         function closeTextStyleModal(event) {
@@ -938,9 +952,9 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const scaleLabel = document.getElementById("picker-text-scale-label");
             if (fill) fill.value = themeTextStyle.fill || "#ffffff";
             if (outline) outline.checked = !!themeTextStyle.outline;
-            if (headerBar) headerBar.checked = !!themeTextStyle.headerBar;
-            if (scale) scale.value = String(themeTextStyle.scale || 100);
-            if (scaleLabel) scaleLabel.textContent = `${themeTextStyle.scale || 100}%`;
+            if (headerBar) headerBar.checked = themeTextStyle.headerBar !== false;
+            if (scale) scale.value = String(themeTextStyle.scale ?? 110);
+            if (scaleLabel) scaleLabel.textContent = `${themeTextStyle.scale ?? 110}%`;
         }
 
         function updateTextStyleFromControls() {
@@ -952,7 +966,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (fill) themeTextStyle.fill = fill.value;
             if (outline) themeTextStyle.outline = !!outline.checked;
             if (headerBar) themeTextStyle.headerBar = !!headerBar.checked;
-            if (scale) themeTextStyle.scale = Number(scale.value) || 100;
+            if (scale) themeTextStyle.scale = Number(scale.value) || 110;
             saveThemeTextStyle();
             drawCanvasState();
         }
@@ -963,47 +977,13 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             drawCanvasState();
         }
 
-        function renderTextStyleLegend() {
-            // Sidebar preset chips removed; presets remain available in the Aa modal.
-        }
-
-        function renderTextStylePresetList() {
-            const el = document.getElementById("text-style-preset-list");
-            if (!el) return;
-            el.innerHTML = Object.values(textStylePresets).map((preset) => {
-                const active = themeTextStyle.preset === preset.id;
-                return `<button type="button" onclick="applyTextStylePreset('${preset.id}')"
-                    class="w-full text-left px-3 py-2 rounded border flex items-center gap-3 ${active ? 'border-sky-400 bg-slate-800' : 'border-slate-800 bg-slate-950/60 hover:bg-slate-800/80'}">
-                    <span class="inline-flex items-center justify-center w-16 h-8 rounded text-[10px] font-bold flex-shrink-0"
-                        style="background:${preset.sampleBg};color:${preset.fill}">Aa</span>
-                    <span class="min-w-0">
-                        <span class="block text-slate-200 font-semibold">${preset.label}</span>
-                        <span class="block text-slate-500">${preset.hint}</span>
-                    </span>
-                    ${active ? '<span class="ml-auto text-sky-400 text-[10px] font-bold">ACTIVE</span>' : ''}
-                </button>`;
-            }).join("");
-        }
-
         function applyTooltipTextStyle() {
             const tooltip = document.getElementById("floating-tooltip");
             if (!tooltip) return;
-            const scale = Math.max(0.8, Math.min(1.4, (themeTextStyle.scale || 100) / 100));
+            const scale = Math.max(0.8, Math.min(1.4, (themeTextStyle.scale || 110) / 100));
             tooltip.style.fontSize = `${12 * scale}px`;
             tooltip.style.color = "";
             tooltip.style.textShadow = "";
-        }
-
-        function updateTextStylePreview() {
-            const preview = document.getElementById("text-style-preview");
-            if (!preview) return;
-            const fill = themeTextStyle.fill || "#ffffff";
-            const shadow = themeTextStyle.outline ? "0 0 3px rgba(0,0,0,0.85)" : "none";
-            preview.querySelectorAll("div").forEach((cell) => {
-                cell.style.color = fill;
-                cell.style.textShadow = shadow;
-                cell.style.fontSize = `${11 * ((themeTextStyle.scale || 100) / 100)}px`;
-            });
         }
 
         function drawTreemapLabel(ctx, text, x, y, opts = {}) {
@@ -1351,9 +1331,9 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     modalClosed = true;
                 }
 
-                if (!modalClosed && activeSearchQuery !== "") {
+                if (!modalClosed && hasActiveSearch()) {
                     clearSearch();
-                } else if (!modalClosed && activeSearchQuery === "") {
+                } else if (!modalClosed && !hasActiveSearch()) {
                     if (activeChainId || activeChainVDiskIds.size > 0 || activeMemberChainIds.size > 0 || activeLineageId) {
                         activeChainId = null;
                         activeLineageId = null;
@@ -1373,6 +1353,9 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         function openSearchModal() {
             document.getElementById("search-modal").classList.remove("hidden");
+            updateTimeFilterSummary();
+            updateSearchClearVisibility();
+            onAdvancedTimeModeChange();
             const input = document.getElementById("search-input");
             input.focus();
             input.select();
@@ -1390,9 +1373,345 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     return;
                 }
                 activeSearchQuery = inputVal;
+                if (timeFilterTab === "advanced") {
+                    applyAdvancedTimeFilter(false);
+                } else {
+                    const amountEl = document.getElementById("time-relative-amount");
+                    const unitEl = document.getElementById("time-relative-unit");
+                    const amount = Number(amountEl && amountEl.value);
+                    if (Number.isFinite(amount) && amount > 0 && activeTimeFilter && activeTimeFilter.kind === "relative") {
+                        activeTimeFilter = { kind: "relative", amount, unit: (unitEl && unitEl.value) || "hours" };
+                    }
+                }
+                updateTimeFilterSummary();
+                updateSearchClearVisibility();
                 applySearchAndRender();
                 closeSearchModal();
             }
+        }
+
+        function setTimeFilterTab(tab) {
+            timeFilterTab = tab === "advanced" ? "advanced" : "basic";
+            const basic = document.getElementById("time-filter-basic");
+            const advanced = document.getElementById("time-filter-advanced");
+            const tabBasic = document.getElementById("time-tab-basic");
+            const tabAdvanced = document.getElementById("time-tab-advanced");
+            if (basic) basic.classList.toggle("hidden", timeFilterTab !== "basic");
+            if (advanced) advanced.classList.toggle("hidden", timeFilterTab !== "advanced");
+            if (tabBasic) {
+                tabBasic.className = timeFilterTab === "basic"
+                    ? "px-2 py-0.5 rounded border border-sky-500/60 bg-sky-900/40 text-sky-200"
+                    : "px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-400";
+            }
+            if (tabAdvanced) {
+                tabAdvanced.className = timeFilterTab === "advanced"
+                    ? "px-2 py-0.5 rounded border border-sky-500/60 bg-sky-900/40 text-sky-200"
+                    : "px-2 py-0.5 rounded border border-slate-700 bg-slate-800 text-slate-400";
+            }
+            if (timeFilterTab === "advanced") onAdvancedTimeModeChange();
+        }
+
+        function onAdvancedTimeModeChange() {
+            const modeEl = document.getElementById("time-advanced-mode");
+            const mode = (modeEl && modeEl.value) || "after";
+            const afterRow = document.getElementById("time-advanced-after-row");
+            const beforeRow = document.getElementById("time-advanced-before-row");
+            const betweenRow = document.getElementById("time-advanced-between-row");
+            if (afterRow) afterRow.classList.toggle("hidden", mode !== "after");
+            if (beforeRow) beforeRow.classList.toggle("hidden", mode !== "before");
+            if (betweenRow) betweenRow.classList.toggle("hidden", mode !== "between");
+        }
+
+        function clearAdvancedTimeInputs() {
+            ["time-after", "time-before", "time-start", "time-end"].forEach((id) => {
+                const el = document.getElementById(id);
+                if (el) el.value = "";
+            });
+        }
+
+        function clearTimeFilterUi() {
+            activeTimeFilter = null;
+            const amountEl = document.getElementById("time-relative-amount");
+            const unitEl = document.getElementById("time-relative-unit");
+            if (amountEl) amountEl.value = "24";
+            if (unitEl) unitEl.value = "hours";
+            clearAdvancedTimeInputs();
+            const modeEl = document.getElementById("time-advanced-mode");
+            if (modeEl) modeEl.value = "after";
+            onAdvancedTimeModeChange();
+            setTimeFilterTab("basic");
+            updateTimeFilterSummary();
+        }
+
+        function clearTimeFilterOnly() {
+            activeTimeFilter = null;
+            clearAdvancedTimeInputs();
+            updateTimeFilterSummary();
+            updateSearchClearVisibility();
+            applySearchAndRender();
+        }
+
+        function datetimeLocalToMs(value) {
+            if (!value) return null;
+            const ms = new Date(value).getTime();
+            return Number.isFinite(ms) ? ms : null;
+        }
+
+        function applyRelativePreset(amount, unit) {
+            activeTimeFilter = { kind: "relative", amount: Number(amount), unit };
+            const amountEl = document.getElementById("time-relative-amount");
+            const unitEl = document.getElementById("time-relative-unit");
+            if (amountEl) amountEl.value = String(amount);
+            if (unitEl) unitEl.value = unit;
+            clearAdvancedTimeInputs();
+            setTimeFilterTab("basic");
+            updateTimeFilterSummary();
+            updateSearchClearVisibility();
+            applySearchAndRender();
+        }
+
+        function applyRelativeCustom() {
+            const amountEl = document.getElementById("time-relative-amount");
+            const unitEl = document.getElementById("time-relative-unit");
+            const amount = Number(amountEl && amountEl.value);
+            const unit = (unitEl && unitEl.value) || "hours";
+            if (!Number.isFinite(amount) || amount <= 0) return;
+            activeTimeFilter = { kind: "relative", amount, unit };
+            clearAdvancedTimeInputs();
+            setTimeFilterTab("basic");
+            updateTimeFilterSummary();
+            updateSearchClearVisibility();
+            applySearchAndRender();
+        }
+
+        function applyAdvancedTimeFilter(shouldCloseModal = false) {
+            const modeEl = document.getElementById("time-advanced-mode");
+            const mode = (modeEl && modeEl.value) || "after";
+            setTimeFilterTab("advanced");
+            if (mode === "after") {
+                const startMs = datetimeLocalToMs(document.getElementById("time-after")?.value);
+                if (startMs === null) return;
+                activeTimeFilter = { kind: "after", startMs };
+            } else if (mode === "before") {
+                const endMs = datetimeLocalToMs(document.getElementById("time-before")?.value);
+                if (endMs === null) return;
+                activeTimeFilter = { kind: "before", endMs };
+            } else {
+                const startMs = datetimeLocalToMs(document.getElementById("time-start")?.value);
+                const endMs = datetimeLocalToMs(document.getElementById("time-end")?.value);
+                if (startMs === null || endMs === null) return;
+                activeTimeFilter = { kind: "between", startMs, endMs };
+            }
+            updateTimeFilterSummary();
+            updateSearchClearVisibility();
+            applySearchAndRender();
+            if (shouldCloseModal) closeSearchModal();
+        }
+
+        function relativeUnitMs(unit) {
+            const hour = 3600 * 1000;
+            const day = 24 * hour;
+            if (unit === "hours") return hour;
+            if (unit === "days") return day;
+            if (unit === "weeks") return 7 * day;
+            if (unit === "months") return 30 * day;
+            if (unit === "years") return 365 * day;
+            return hour;
+        }
+
+        function resolveTimeFilterBounds(filter, nowMs = Date.now()) {
+            if (!filter) return null;
+            if (filter.kind === "relative") {
+                const delta = Number(filter.amount) * relativeUnitMs(filter.unit);
+                if (!Number.isFinite(delta) || delta <= 0) return null;
+                return { startMs: nowMs - delta, endMs: nowMs };
+            }
+            if (filter.kind === "after") return { startMs: filter.startMs, endMs: null };
+            if (filter.kind === "before") return { startMs: null, endMs: filter.endMs };
+            if (filter.kind === "between") return { startMs: filter.startMs, endMs: filter.endMs };
+            return null;
+        }
+
+        function getVdiskCreationMs(data) {
+            if (!data || data.vdisk_id === undefined || data.vdisk_id === null) return null;
+            const usecs = data.vdisk_creation_time_usecs ?? data.creation_time_usecs;
+            if (usecs === undefined || usecs === null || usecs === "") return null;
+            const ms = Math.floor(Number(usecs) / 1000);
+            return Number.isFinite(ms) ? ms : null;
+        }
+
+        function matchesTimeFilter(data, filter) {
+            if (!filter) return true;
+            const createdMs = getVdiskCreationMs(data);
+            if (createdMs === null) return false;
+            const bounds = resolveTimeFilterBounds(filter);
+            if (!bounds) return false;
+            if (bounds.startMs !== null && bounds.startMs !== undefined && createdMs < bounds.startMs) return false;
+            if (bounds.endMs !== null && bounds.endMs !== undefined && createdMs > bounds.endMs) return false;
+            return true;
+        }
+
+        function formatTimeFilterLabel(filter) {
+            if (!filter) return "";
+            if (filter.kind === "relative") {
+                const n = filter.amount;
+                const u = filter.unit;
+                if (n === 24 && u === "hours") return "created: last 24h";
+                if (n === 1 && u === "weeks") return "created: last week";
+                if (n === 1 && u === "months") return "created: last month";
+                if (n === 1 && u === "years") return "created: last year";
+                const short = { hours: "h", days: "d", weeks: "w", months: "mo", years: "y" }[u] || u;
+                return `created: last ${n}${short}`;
+            }
+            const fmt = (ms) => {
+                if (ms === null || ms === undefined) return "";
+                const d = new Date(ms);
+                if (isNaN(d.getTime())) return "";
+                return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+            };
+            if (filter.kind === "after") return `created: after ${fmt(filter.startMs)}`;
+            if (filter.kind === "before") return `created: before ${fmt(filter.endMs)}`;
+            if (filter.kind === "between") return `created: ${fmt(filter.startMs)}..${fmt(filter.endMs)}`;
+            return "";
+        }
+
+        function updateTimeFilterSummary() {
+            const el = document.getElementById("time-filter-summary");
+            if (!el) return;
+            el.textContent = activeTimeFilter ? formatTimeFilterLabel(activeTimeFilter) : "No creation-time filter";
+        }
+
+        function hasActiveSearch() {
+            return !!(activeSearchQuery.trim() || activeTimeFilter);
+        }
+
+        function updateSearchClearVisibility() {
+            const clearBtn = document.getElementById("search-clear-btn");
+            if (!clearBtn) return;
+            const inputVal = (document.getElementById("search-input")?.value || "").trim();
+            if (inputVal || activeTimeFilter) clearBtn.classList.remove("hidden");
+            else clearBtn.classList.add("hidden");
+        }
+
+        function clearSearch() {
+            document.getElementById("search-input").value = "";
+            activeSearchQuery = "";
+            clearTimeFilterUi();
+            document.getElementById("search-stats").textContent = "";
+            updateSearchClearVisibility();
+            applySearchAndRender();
+        }
+
+        function onSearchInput() {
+            updateSearchClearVisibility();
+        }
+
+        function matchesQuery(data, query) {
+            if (!query) return true;
+            let q = query.toLowerCase().trim();
+
+            if (q.startsWith("chain id:") || q.startsWith("chain:")) {
+                const targetChain = q.replace(/^chain id:|^chain:/, "").trim();
+                if (data.chain_id && String(data.chain_id).toLowerCase().includes(targetChain)) return true;
+                if (data.member_chain_ids && data.member_chain_ids.some(cid => String(cid).toLowerCase().includes(targetChain))) return true;
+                return false;
+            }
+
+            if (q.startsWith("vdisk id:") || q.startsWith("vdisk:")) {
+                const targetVdiskId = q.replace(/^vdisk id:|^vdisk:/, "").trim();
+                if (data.vdisk_id && String(data.vdisk_id).toLowerCase().includes(targetVdiskId)) return true;
+                return false;
+            }
+
+            if (q.startsWith("vdisk uuid:") || q.startsWith("uuid:")) {
+                const targetUuid = q.replace(/^vdisk uuid:|^uuid:/, "").trim();
+                if (data.vdisk_uuid && String(data.vdisk_uuid).toLowerCase().includes(targetUuid)) return true;
+                return false;
+            }
+
+            if (q.startsWith("parent vdisk id:") || q.startsWith("parent:")) {
+                const targetParentId = q.replace(/^parent vdisk id:|^parent:/, "").trim();
+                if (data.parent_vdisk_id && String(data.parent_vdisk_id).toLowerCase().includes(targetParentId)) return true;
+                return false;
+            }
+
+            if (q.startsWith("nfs file name:") || q.startsWith("nfs:")) {
+                const targetNfs = q.replace(/^nfs file name:|^nfs:/, "").trim();
+                if (data.nfs_file_name && String(data.nfs_file_name).toLowerCase().includes(targetNfs)) return true;
+                return false;
+            }
+
+            if (data.name && data.name.toLowerCase().includes(q)) return true;
+            if (data.vdisk_id && String(data.vdisk_id).toLowerCase().includes(q)) return true;
+            if (data.vdisk_size && String(data.vdisk_size).toLowerCase().includes(q)) return true;
+            if (data.vdisk_uuid && String(data.vdisk_uuid).toLowerCase().includes(q)) return true;
+            if (data.chain_id && String(data.chain_id).toLowerCase().includes(q)) return true;
+            if (data.vdisk_name && String(data.vdisk_name).toLowerCase().includes(q)) return true;
+            if (data.nfs_file_name && String(data.nfs_file_name).toLowerCase().includes(q)) return true;
+            if (data.parent_vdisk_id && String(data.parent_vdisk_id).toLowerCase().includes(q)) return true;
+
+            if (data.chain_info && Array.isArray(data.chain_info)) {
+                for (const cInfo of data.chain_info) {
+                    if (String(cInfo.chain_index).includes(q)) return true;
+                    if (cInfo.chain_ids && cInfo.chain_ids.some(id => String(id).includes(q))) return true;
+                }
+            }
+
+            return false;
+        }
+
+        function matchesSearchNode(data, query, timeFilter) {
+            const textOk = query ? matchesQuery(data, query) : true;
+            const timeOk = matchesTimeFilter(data, timeFilter);
+            if (!query && !timeFilter) return false;
+            if (query && timeFilter) return textOk && timeOk;
+            if (query) return textOk;
+            // time-only: only vdisk leaves can match
+            if (data.vdisk_id === undefined || data.vdisk_id === null) return false;
+            return timeOk;
+        }
+
+        function applySearchAndRender() {
+            if (!fullRootNode) return;
+
+            const query = activeSearchQuery.trim().toLowerCase();
+            const timeFilter = activeTimeFilter;
+            const searching = !!(query || timeFilter);
+            if (searching) breadcrumbMode = "keyword";
+            updateBreadcrumbBarDisplay();
+
+            let matchCount = 0;
+
+            function evaluateSearchGlobal(n, ancestorMatched) {
+                let selfMatch = searching ? matchesSearchNode(n.data, query, timeFilter) : false;
+                let effectiveMatch = selfMatch || ancestorMatched;
+                
+                let descendantMatch = false;
+                if (n.children) {
+                    for (let child of n.children) {
+                        if (evaluateSearchGlobal(child, effectiveMatch)) {
+                            descendantMatch = true;
+                        }
+                    }
+                }
+                
+                n.isSearchMatch = selfMatch;
+                n.isAncestorSearchMatch = ancestorMatched;
+                n.hasMatchingDescendant = descendantMatch;
+                n.isEffectiveSearchMatch = !searching || effectiveMatch || descendantMatch;
+                
+                if (selfMatch) matchCount++;
+                return selfMatch || descendantMatch;
+            }
+
+            evaluateSearchGlobal(fullRootNode, false);
+
+            if (searching) document.getElementById("search-stats").textContent = `Found ${matchCount} matching entities.`;
+            else document.getElementById("search-stats").textContent = "";
+
+            renderHierarchyTree(fullRootNode, searching);
+            
+            if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
         }
 
         function parseOfflineLogSections(rawText) {
@@ -1969,116 +2288,6 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             panel.classList.add("translate-y-full");
         }
 
-        function clearSearch() {
-            document.getElementById("search-input").value = "";
-            document.getElementById("search-clear-btn").classList.add("hidden");
-            activeSearchQuery = "";
-            document.getElementById("search-stats").textContent = "";
-            applySearchAndRender();
-        }
-
-        function onSearchInput() {
-            const val = document.getElementById("search-input").value;
-            const clearBtn = document.getElementById("search-clear-btn");
-            if (val) clearBtn.classList.remove("hidden");
-            else clearBtn.classList.add("hidden");
-        }
-
-        function matchesQuery(data, query) {
-            if (!query) return true;
-            let q = query.toLowerCase().trim();
-
-            if (q.startsWith("chain id:") || q.startsWith("chain:")) {
-                const targetChain = q.replace(/^chain id:|^chain:/, "").trim();
-                if (data.chain_id && String(data.chain_id).toLowerCase().includes(targetChain)) return true;
-                if (data.member_chain_ids && data.member_chain_ids.some(cid => String(cid).toLowerCase().includes(targetChain))) return true;
-                return false;
-            }
-
-            if (q.startsWith("vdisk id:") || q.startsWith("vdisk:")) {
-                const targetVdiskId = q.replace(/^vdisk id:|^vdisk:/, "").trim();
-                if (data.vdisk_id && String(data.vdisk_id).toLowerCase().includes(targetVdiskId)) return true;
-                return false;
-            }
-
-            if (q.startsWith("vdisk uuid:") || q.startsWith("uuid:")) {
-                const targetUuid = q.replace(/^vdisk uuid:|^uuid:/, "").trim();
-                if (data.vdisk_uuid && String(data.vdisk_uuid).toLowerCase().includes(targetUuid)) return true;
-                return false;
-            }
-
-            if (q.startsWith("parent vdisk id:") || q.startsWith("parent:")) {
-                const targetParentId = q.replace(/^parent vdisk id:|^parent:/, "").trim();
-                if (data.parent_vdisk_id && String(data.parent_vdisk_id).toLowerCase().includes(targetParentId)) return true;
-                return false;
-            }
-
-            if (q.startsWith("nfs file name:") || q.startsWith("nfs:")) {
-                const targetNfs = q.replace(/^nfs file name:|^nfs:/, "").trim();
-                if (data.nfs_file_name && String(data.nfs_file_name).toLowerCase().includes(targetNfs)) return true;
-                return false;
-            }
-
-            if (data.name && data.name.toLowerCase().includes(q)) return true;
-            if (data.vdisk_id && String(data.vdisk_id).toLowerCase().includes(q)) return true;
-            if (data.vdisk_size && String(data.vdisk_size).toLowerCase().includes(q)) return true;
-            if (data.vdisk_uuid && String(data.vdisk_uuid).toLowerCase().includes(q)) return true;
-            if (data.chain_id && String(data.chain_id).toLowerCase().includes(q)) return true;
-            if (data.vdisk_name && String(data.vdisk_name).toLowerCase().includes(q)) return true;
-            if (data.nfs_file_name && String(data.nfs_file_name).toLowerCase().includes(q)) return true;
-            if (data.parent_vdisk_id && String(data.parent_vdisk_id).toLowerCase().includes(q)) return true;
-
-            if (data.chain_info && Array.isArray(data.chain_info)) {
-                for (const cInfo of data.chain_info) {
-                    if (String(cInfo.chain_index).includes(q)) return true;
-                    if (cInfo.chain_ids && cInfo.chain_ids.some(id => String(id).includes(q))) return true;
-                }
-            }
-
-            return false;
-        }
-
-        function applySearchAndRender() {
-            if (!fullRootNode) return;
-
-            const query = activeSearchQuery.trim().toLowerCase();
-            if (query) breadcrumbMode = "keyword";
-            updateBreadcrumbBarDisplay();
-
-            let matchCount = 0;
-
-            function evaluateSearchGlobal(n, ancestorMatched) {
-                let selfMatch = query ? matchesQuery(n.data, query) : false;
-                let effectiveMatch = selfMatch || ancestorMatched;
-                
-                let descendantMatch = false;
-                if (n.children) {
-                    for (let child of n.children) {
-                        if (evaluateSearchGlobal(child, effectiveMatch)) {
-                            descendantMatch = true;
-                        }
-                    }
-                }
-                
-                n.isSearchMatch = selfMatch;
-                n.isAncestorSearchMatch = ancestorMatched;
-                n.hasMatchingDescendant = descendantMatch;
-                n.isEffectiveSearchMatch = !query || effectiveMatch || descendantMatch;
-                
-                if (selfMatch) matchCount++;
-                return selfMatch || descendantMatch;
-            }
-
-            evaluateSearchGlobal(fullRootNode, false);
-
-            if (query) document.getElementById("search-stats").textContent = `Found ${matchCount} matching entities.`;
-            else document.getElementById("search-stats").textContent = "";
-
-            renderHierarchyTree(fullRootNode, query !== "");
-            
-            if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
-        }
-
         function formatBytes(bytes) {
             if (!bytes || bytes <= 0) return "0 KiB";
             const val = Number(bytes);
@@ -2638,13 +2847,22 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         }
 
         function toggleBreadcrumbMode() {
-            const hasKeyword = !!activeSearchQuery.trim();
+            const hasKeyword = hasActiveSearch();
             if (!hasKeyword) {
                 breadcrumbMode = "path";
             } else {
                 breadcrumbMode = breadcrumbMode === "path" ? "keyword" : "path";
             }
             updateBreadcrumbBarDisplay();
+        }
+
+        function getActiveSearchBreadcrumbLabel() {
+            const parts = [];
+            const rawKeyword = activeSearchQuery.trim();
+            if (rawKeyword) parts.push(rawKeyword);
+            const timeLabel = formatTimeFilterLabel(activeTimeFilter);
+            if (timeLabel) parts.push(timeLabel);
+            return parts.join(" · ");
         }
 
         function updateBreadcrumbBarDisplay() {
@@ -2655,8 +2873,8 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const searchBtn = document.getElementById("breadcrumb-search-btn");
             if (!modeToggle || !pathEl || !keywordEl || !clearBtn || !searchBtn) return;
 
-            const rawKeyword = activeSearchQuery.trim();
-            const hasKeyword = rawKeyword.length > 0;
+            const label = getActiveSearchBreadcrumbLabel();
+            const hasKeyword = hasActiveSearch();
             if (!hasKeyword && breadcrumbMode === "keyword") breadcrumbMode = "path";
 
             const showingKeyword = hasKeyword && breadcrumbMode === "keyword";
@@ -2672,7 +2890,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (showingKeyword) {
                 pathEl.classList.add("hidden");
                 keywordEl.classList.remove("hidden");
-                keywordEl.textContent = rawKeyword;
+                keywordEl.textContent = label;
                 clearBtn.classList.remove("hidden");
                 searchBtn.classList.add("hidden");
             } else {
@@ -2807,19 +3025,23 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 .sum(d => d.value || 0)
                 .sort((a, b) => b.value - a.value);
 
+            // Keep title band clear of child tiles: header height + same gutter as sibling gaps.
+            const layout = getTreemapLayoutMetrics();
             d3.treemap()
                 .size([width, height])
-                .paddingTop(22)
-                .paddingRight(3)
-                .paddingBottom(3)
-                .paddingLeft(3)
-                .paddingInner(3)(localRoot);
+                .paddingTop(layout.titleGutter)
+                .paddingRight(0)
+                .paddingBottom(0)
+                .paddingLeft(0)
+                .paddingInner(layout.innerGutter)(localRoot);
 
             const query = activeSearchQuery.trim().toLowerCase();
+            const timeFilter = activeTimeFilter;
+            const searching = !!(query || timeFilter);
             const initialAncestorMatch = currentHierarchyNode ? (currentHierarchyNode.isSearchMatch || currentHierarchyNode.isAncestorSearchMatch) : false;
 
             function evaluateLocalSearch(n, ancestorMatched) {
-                let selfMatch = query ? matchesQuery(n.data, query) : false;
+                let selfMatch = searching ? matchesSearchNode(n.data, query, timeFilter) : false;
                 let effectiveMatch = selfMatch || ancestorMatched;
                 let descendantMatch = false;
                 if (n.children) {
@@ -2831,7 +3053,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 }
                 n.isSearchMatch = selfMatch;
                 n.isAncestorSearchMatch = ancestorMatched;
-                n.isEffectiveSearchMatch = !query || effectiveMatch || descendantMatch;
+                n.isEffectiveSearchMatch = !searching || effectiveMatch || descendantMatch;
                 return selfMatch || descendantMatch;
             }
             evaluateLocalSearch(localRoot, initialAncestorMatch);
@@ -2842,6 +3064,15 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             drawCanvasState();
         }
 
+        function getTreemapLayoutMetrics() {
+            const textScale = Math.max(0.7, Math.min(1.6, (themeTextStyle.scale || 100) / 100));
+            const innerGutter = 2;
+            const titleBarHeight = Math.max(18, Math.round(22 * textScale));
+            // Child blocks start below the title band, with one default gutter under the title.
+            const titleGutter = titleBarHeight + innerGutter;
+            return { textScale, innerGutter, titleBarHeight, titleGutter };
+        }
+
         function drawCanvasState() {
             const canvas = document.getElementById("treemap-canvas");
             if (!canvas) return;
@@ -2849,7 +3080,9 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const width = wrapper.clientWidth;
             const height = wrapper.clientHeight;
             const dpr = window.devicePixelRatio || 1;
-            const textScale = Math.max(0.7, Math.min(1.6, (themeTextStyle.scale || 100) / 100));
+            const layout = getTreemapLayoutMetrics();
+            const textScale = layout.textScale;
+            const titleBarHeight = layout.titleBarHeight;
             const labelFill = themeTextStyle.fill || "#ffffff";
             
             canvas.width = width * dpr;
@@ -2860,6 +3093,9 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const ctx = canvas.getContext("2d");
             ctx.scale(dpr, dpr);
             ctx.clearRect(0, 0, width, height);
+            // Flat divider background (shows through gutters between tiles / under titles).
+            ctx.fillStyle = "#0f172a";
+            ctx.fillRect(0, 0, width, height);
 
             currentDrawnNodes.forEach(d => {
                 const w = Math.max(0, d.x1 - d.x0);
@@ -2890,7 +3126,7 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 })();
 
                 const isLegendFilteredOut = activeLegendFilter && !nodeOrAncestorMatchesCategory(d, activeLegendFilter);
-                const isSearchFilteredOut = activeSearchQuery && !d.isEffectiveSearchMatch;
+                const isSearchFilteredOut = hasActiveSearch() && !d.isEffectiveSearchMatch;
                 
                 const isFilteredOut = isLegendFilteredOut || isSearchFilteredOut;
 
@@ -2905,26 +3141,25 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
                 ctx.fillRect(d.x0, d.y0, w, h);
 
+                // Flat hairline borders — no offsets/shadows (flush in-block).
+                ctx.shadowBlur = 0;
+                ctx.shadowColor = "transparent";
                 if (isPrimarySelected) {
-                    // Selected node: strongest emphasis.
-                    ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
-                    ctx.fillRect(d.x0 + 1, d.y0 + 1, Math.max(0, w - 2), Math.max(0, h - 2));
-                    ctx.lineWidth = 3;
-                    ctx.strokeStyle = "#22d3ee";
-                    ctx.shadowColor = "rgba(34, 211, 238, 0.65)";
-                    ctx.shadowBlur = 12;
-                    ctx.strokeRect(d.x0 + 1.5, d.y0 + 1.5, Math.max(0, w - 3), Math.max(0, h - 3));
-                } else if (isHighlight) {
-                    // Chained-related nodes: highlighted but secondary.
+                    ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
+                    ctx.fillRect(d.x0, d.y0, w, h);
                     ctx.lineWidth = 2;
+                    ctx.strokeStyle = "#22d3ee";
+                    ctx.strokeRect(d.x0 + 0.5, d.y0 + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
+                } else if (isHighlight) {
+                    ctx.fillStyle = "rgba(251, 191, 36, 0.10)";
+                    ctx.fillRect(d.x0, d.y0, w, h);
+                    ctx.lineWidth = 1.5;
                     ctx.strokeStyle = "#fbbf24";
-                    ctx.shadowColor = "rgba(251, 191, 36, 0.35)";
-                    ctx.shadowBlur = 6;
-                    ctx.strokeRect(d.x0 + 1, d.y0 + 1, w - 2, h - 2);
+                    ctx.strokeRect(d.x0 + 0.5, d.y0 + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
                 } else {
                     ctx.lineWidth = 1;
-                    ctx.strokeStyle = d.children ? "rgba(255, 255, 255, 0.4)" : "rgba(255, 255, 255, 0.15)";
-                    ctx.strokeRect(d.x0, d.y0, w, h);
+                    ctx.strokeStyle = d.children ? "rgba(255, 255, 255, 0.28)" : "rgba(15, 23, 42, 0.55)";
+                    ctx.strokeRect(d.x0 + 0.5, d.y0 + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
                 }
 
                 if (w > 35 && h > 18) {
@@ -2942,13 +3177,13 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     } else if (d.children) {
                         if (themeTextStyle.headerBar) {
                             ctx.fillStyle = "rgba(15, 23, 42, 0.72)";
-                            ctx.fillRect(d.x0, d.y0, w, Math.round(22 * textScale));
+                            ctx.fillRect(d.x0, d.y0, w, titleBarHeight);
                         }
                         ctx.font = `bold ${Math.round(11 * textScale)}px sans-serif`;
                         let label = d.data.name;
                         if (containsChainVDisk) label = "🔗 " + label;
                         // OneClickKB-style: bold label directly on colored tile.
-                        drawTreemapLabel(ctx, `${label} (${formatBytes(getRealNodeSum(d))})`, d.x0 + 4, d.y0 + Math.round(14 * textScale), { fill: labelFill });
+                        drawTreemapLabel(ctx, `${label} (${formatBytes(getRealNodeSum(d))})`, d.x0 + 4, d.y0 + Math.round(titleBarHeight * 0.64), { fill: labelFill });
                     } else {
                         if (isExactChainLeaf) {
                             ctx.fillStyle = "#f59e0b";
@@ -2985,15 +3220,15 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 ctx.restore();
             });
 
-            if (activeLegendFilter || activeSearchQuery) {
+            if (activeLegendFilter || hasActiveSearch()) {
                 currentDrawnNodes.forEach(d => {
                     let shouldHighlight = false;
                     
-                    if (activeLegendFilter && activeSearchQuery) {
+                    if (activeLegendFilter && hasActiveSearch()) {
                         shouldHighlight = nodeOrAncestorMatchesCategory(d, activeLegendFilter) && (d.isSearchMatch || d.isAncestorSearchMatch);
                     } else if (activeLegendFilter) {
                         shouldHighlight = nodeOrAncestorMatchesCategory(d, activeLegendFilter);
-                    } else if (activeSearchQuery) {
+                    } else if (hasActiveSearch()) {
                         shouldHighlight = (d.isSearchMatch || d.isAncestorSearchMatch);
                     }
 
@@ -3001,11 +3236,13 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                         const w = Math.max(0, d.x1 - d.x0);
                         const h = Math.max(0, d.y1 - d.y0);
                         ctx.save();
-                        ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
-                        ctx.lineWidth = 2;
-                        ctx.strokeRect(d.x0 + 1, d.y0 + 1, w - 2, h - 2);
-                        ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+                        ctx.shadowBlur = 0;
+                        ctx.shadowColor = "transparent";
+                        ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
                         ctx.fillRect(d.x0, d.y0, w, h);
+                        ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+                        ctx.lineWidth = 1.5;
+                        ctx.strokeRect(d.x0 + 0.5, d.y0 + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
                         ctx.restore();
                     }
                 });
@@ -3016,11 +3253,11 @@ print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 const w = Math.max(0, d.x1 - d.x0);
                 const h = Math.max(0, d.y1 - d.y0);
                 ctx.save();
+                ctx.shadowBlur = 0;
+                ctx.shadowColor = "transparent";
                 ctx.strokeStyle = "#ffffff";
-                ctx.lineWidth = 2;
-                ctx.shadowColor = "rgba(255, 255, 255, 0.8)";
-                ctx.shadowBlur = 10;
-                ctx.strokeRect(d.x0 + 1, d.y0 + 1, w - 2, h - 2);
+                ctx.lineWidth = 1.5;
+                ctx.strokeRect(d.x0 + 0.5, d.y0 + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
                 ctx.restore();
             }
         }

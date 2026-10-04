@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 collector_timing = {}
 
 def emit_progress(step_num, message):
-    print("===PROGRESS:%s/7:%s===" % (step_num, message))
+    print("===PROGRESS:%s/8:%s===" % (step_num, message))
     sys.stdout.flush()
 
 def run_cmd(cmd, timeout_sec=60):

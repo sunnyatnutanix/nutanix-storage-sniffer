@@ -123,7 +123,7 @@ CURATOR_CHAIN_CHUNK = max(1, get_int_env("CURATOR_CHAIN_CHUNK", 80 if FAST_MODE 
 CURATOR_RETRY_CHUNK = max(1, get_int_env("CURATOR_RETRY_CHUNK", 30 if FAST_MODE else 40))
 collector_timing = {}
 
-print("[1/7] Collecting core NCLI + vdisk metadata...")
+print("[1/8] Collecting core NCLI + vdisk metadata...")
 t0 = time.time()
 ncli_ctr = run_cmd("ncli container ls", timeout_sec=90)
 ncli_vm = run_cmd("ncli vm ls", timeout_sec=120)
@@ -132,7 +132,7 @@ ncli_sp = run_cmd("ncli storagepool ls", timeout_sec=60)
 vdisk_cfg = run_binary("vdisk_config_printer", timeout_sec=120)
 collector_timing["core_query_sec"] = round(time.time() - t0, 3)
 
-print("[2/7] Preparing container metadata for batching...")
+print("[2/8] Preparing container metadata for batching...")
 container_names = []
 for m in re.finditer(r"^\s*Name\s*:\s*([^\n]+)", ncli_ctr, re.MULTILINE):
     nm = m.group(1).strip()
@@ -142,7 +142,7 @@ if MAX_CONTAINERS > 0:
     container_names = container_names[:MAX_CONTAINERS]
 collector_timing["nfs_ls_sec"] = 0.0
 
-print("[3/7] Parsing IDs for curator batching...")
+print("[3/8] Parsing IDs for curator batching...")
 raw_vdisk_ids = sorted(
     set(re.findall(r"^\s*vdisk_id\s*:\s*(\d+)", vdisk_cfg, re.MULTILINE)),
     key=lambda x: int(x),
@@ -174,15 +174,15 @@ def run_curator_chain_usage(chain_ids, chunk_size=120):
     )
 
 
-print("[4/7] Querying curator vdisk usage...")
+print("[4/8] Querying curator vdisk usage...")
 t0 = time.time()
 curator_out = run_curator_vdisk_usage(raw_vdisk_ids, chunk_size=CURATOR_VDISK_CHUNK)
 collector_timing["curator_vdisk_sec"] = round(time.time() - t0, 3)
-print("[5/7] Querying curator chain usage...")
+print("[5/8] Querying curator chain usage...")
 t0 = time.time()
 curator_chain_out = run_curator_chain_usage(raw_chain_ids, chunk_size=CURATOR_CHAIN_CHUNK)
 collector_timing["curator_chain_sec"] = round(time.time() - t0, 3)
-print("[5b/7] Querying curator garbage report...")
+print("[6/8] Querying curator garbage report...")
 t0 = time.time()
 curator_garbage_out = run_binary("curator_cli display_garbage_report", timeout_sec=180)
 collector_timing["curator_garbage_sec"] = round(time.time() - t0, 3)
@@ -195,7 +195,7 @@ collector_timing["collector_workers"] = {"curator": CURATOR_WORKERS}
 collector_timing["collector_chunk"] = {"vdisk": CURATOR_VDISK_CHUNK, "chain": CURATOR_CHAIN_CHUNK, "retry": CURATOR_RETRY_CHUNK}
 
 out_filename = "vdisk_sniffer_offline.log"
-print("[6/7] Writing output to %s..." % out_filename)
+print("[7/8] Writing output to %s..." % out_filename)
 with open(out_filename, "w") as f:
     f.write("===VDISK_CFG_START===\n" + vdisk_cfg + "\n")
     f.write("===NCLI_SP_START===\n" + ncli_sp + "\n")
@@ -207,4 +207,4 @@ with open(out_filename, "w") as f:
     f.write("===CURATOR_GARBAGE_START===\n" + curator_garbage_out + "\n")
     f.write("===COLLECTOR_TIMING_START===\n" + json.dumps(collector_timing) + "\n")
 
-print("[7/7] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")
+print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")

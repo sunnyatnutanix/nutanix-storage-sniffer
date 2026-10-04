@@ -154,7 +154,26 @@ def format_bytes(bytes_val: int) -> str:
     else: return f"{val / (1024**4):.2f} TiB"
 
 
-def compute_chain_snap_share(chain_id: str, chain_vdisk_ids: list, chain_usage_map: dict, usage_map: dict) -> dict:
+def is_live_vdisk(vd) -> bool:
+    """Live = not Immutable/ImmutableSnapshot and not in recycle bin."""
+    if vd is None:
+        return False
+    if hasattr(vd, "is_snapshot") or hasattr(vd, "is_in_recycle_bin"):
+        return (not bool(getattr(vd, "is_snapshot", False))
+                and not bool(getattr(vd, "is_in_recycle_bin", False)))
+    if isinstance(vd, dict):
+        mut = str(vd.get("mutability_state", "") or "")
+        return ("Immutable" not in mut) and not bool(vd.get("in_recycle_bin", False))
+    return False
+
+
+def compute_chain_snap_share(
+    chain_id: str,
+    chain_vdisk_ids: list,
+    chain_usage_map: dict,
+    usage_map: dict,
+    vdisk_lookup: dict = None,
+) -> dict:
     """chain_snap_share = (logical_live - logical_shared_clone) * 2 - exclusive_sum."""
     stats = chain_usage_map.get(chain_id, {}) or {}
     logical_live = int(stats.get("logical_live", 0) or 0)
@@ -169,6 +188,9 @@ def compute_chain_snap_share(chain_id: str, chain_vdisk_ids: list, chain_usage_m
         "exclusive_sum": int(exclusive_sum),
         "snap_share": 0,
     }
+    has_live = None
+    if vdisk_lookup is not None:
+        has_live = any(is_live_vdisk(vdisk_lookup.get(str(vd_id))) for vd_id in vids)
     if logical_live == 0:
         source = "skipped_logical_live_zero"
         snap_share = 0
@@ -177,6 +199,9 @@ def compute_chain_snap_share(chain_id: str, chain_vdisk_ids: list, chain_usage_m
         snap_share = 0
     elif len(vids) <= 1:
         source = "skipped_single_vdisk"
+        snap_share = 0
+    elif has_live is False:
+        source = "skipped_no_live_vdisk"
         snap_share = 0
     else:
         snap_share = (logical_live - logical_clone) * 2 - exclusive_sum
@@ -1561,7 +1586,9 @@ def process_container_chain_graph_logs(sections: dict):
                 continue
             seen_snap_chains.add(cid)
             chain_vids = chain_to_vdisk_ids.get(cid, [])
-            computed = compute_chain_snap_share(cid, chain_vids, chain_usage_map, usage_map)
+            computed = compute_chain_snap_share(
+                cid, chain_vids, chain_usage_map, usage_map, vdisk_lookup=vdisk_nodes
+            )
             if int(computed.get("snap_share", 0) or 0) <= 0:
                 continue
             snap_share_nodes.append(
@@ -1855,9 +1882,16 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
         })
 
     container_snap_share_nodes = {}
+    vdisk_lookup_by_id = {
+        str(vd.get("vdisk_id")): vd
+        for vd in vdisks
+        if vd.get("vdisk_id") is not None
+    }
     for cid, c_node in chains.items():
         chain_vdisks = list(c_node.get("vdisk_ids", []))
-        computed = compute_chain_snap_share(cid, chain_vdisks, chain_usage_map, usage_map)
+        computed = compute_chain_snap_share(
+            cid, chain_vdisks, chain_usage_map, usage_map, vdisk_lookup=vdisk_lookup_by_id
+        )
         if int(computed.get("snap_share", 0) or 0) <= 0:
             continue
         c_id = c_node.get("container_id") or "Unknown"
@@ -2069,7 +2103,7 @@ def download_offline_script():
     return FileResponse(
         script_path,
         media_type="text/x-python",
-        filename="collect_offline_log.py",
+        filename="vdisk_sniffer.py",
     )
 
 @app.post("/api/scan")
