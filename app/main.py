@@ -5,7 +5,8 @@ import json
 import time
 import threading
 import uuid
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from datetime import datetime
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
@@ -29,6 +30,9 @@ from app.model_chain import VdiskNode, ChainNode, ChainTree, ContainerGraph
 LOG_DIR = "/app/logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, "vdisk_sniffer.log")
+ACCESS_LOG_FILE = os.path.join(LOG_DIR, "access.log")
+if not os.path.exists(ACCESS_LOG_FILE):
+    open(ACCESS_LOG_FILE, "a", encoding="utf-8").close()
 RAW_CVM_LOG_FILE = os.path.join(LOG_DIR, "raw_cvm_output.log")
 RAW_CVM_LAST_SECTIONS_FILE = os.path.join(LOG_DIR, "raw_cvm_sections_last.json")
 DEBUG_LOG_PATH = "/home/sre/vdisk-sniffer/.cursor/debug-2cdd75.log"
@@ -40,6 +44,46 @@ logger = logging.getLogger("vdisk_sniffer")
 
 app = FastAPI(title="VDisk Sniffer")
 SCAN_JOB_TTL_SEC = 1800
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = (request.headers.get("x-forwarded-for") or "").strip()
+    if forwarded:
+        return forwarded.split(",")[0].strip() or "-"
+    if request.client and request.client.host:
+        return request.client.host
+    return "-"
+
+
+def _clf_quote(value: str) -> str:
+    text = value if value else "-"
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+@app.middleware("http")
+async def combined_access_log(request: Request, call_next):
+    response = await call_next(request)
+    try:
+        ip = _client_ip(request)
+        ts = datetime.now().astimezone().strftime("%d/%b/%Y:%H:%M:%S %z")
+        path = request.url.path
+        if request.url.query:
+            path = f"{path}?{request.url.query}"
+        proto = request.scope.get("http_version", "1.1")
+        bytes_sent = response.headers.get("content-length") or "-"
+        referer = _clf_quote(request.headers.get("referer") or "-")
+        user_agent = _clf_quote(request.headers.get("user-agent") or "-")
+        line = (
+            f'{ip} - - [{ts}] "{request.method} {path} HTTP/{proto}" '
+            f'{response.status_code} {bytes_sent} "{referer}" "{user_agent}"\n'
+        )
+        with open(ACCESS_LOG_FILE, "a", encoding="utf-8") as handle:
+            handle.write(line)
+    except Exception:
+        logger.debug("access log write failed", exc_info=True)
+    return response
+
+
 SCAN_EVENT_POLL_SEC = 0.2
 scan_jobs = {}
 scan_jobs_lock = threading.Lock()
@@ -2088,11 +2132,19 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
 def read_root():
     index_path = os.path.join(STATIC_DIR, "index.html")
     if not os.path.exists(index_path):
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Frontend file not found at '{index_path}'."
-        )
+        raise HTTPException(status_code=404, detail="index.html not found in static directory.")
     return FileResponse(index_path)
+
+
+@app.get("/goaccess")
+@app.get("/goaccess/")
+def read_goaccess_report():
+    report_path = os.path.join(LOG_DIR, "goaccess.html")
+    exists = os.path.exists(report_path)
+    size = os.path.getsize(report_path) if exists else 0
+    if not exists or size <= 0:
+        raise HTTPException(status_code=503, detail="GoAccess report is not ready yet.")
+    return FileResponse(report_path, media_type="text/html")
 
 
 @app.get("/api/offline-script")

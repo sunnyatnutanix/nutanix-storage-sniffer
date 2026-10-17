@@ -6,3 +6,26 @@ services:
     container_name: vdisk_sniffer
     network_mode: "host"
     restart: always
+    volumes:
+      - ./logs:/app/logs
+
+  goaccess:
+    image: allinurl/goaccess:latest
+    container_name: vdisk_sniffer_goaccess
+    network_mode: "host"
+    restart: always
+    depends_on:
+      - vdisk-sniffer
+    volumes:
+      - ./logs:/srv/logs
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        touch /srv/logs/access.log &&
+        goaccess /srv/logs/access.log
+        --log-format=COMBINED
+        --real-time-html
+        --anonymize-ip
+        --addr=0.0.0.0
+        --port=7890
+        -o /srv/logs/goaccess.html

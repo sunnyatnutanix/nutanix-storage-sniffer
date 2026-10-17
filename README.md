@@ -31,11 +31,13 @@ Nutanix Storage Sniffer is a FastAPI + static web UI tool to analyze Nutanix sto
 ## Run with Docker
 
 ```bash
-docker compose up -d --build vdisk-sniffer
+docker compose up -d --build
 docker compose logs -f vdisk-sniffer
 ```
 
 The app runs on `http://localhost:8000` unless overridden by your compose configuration.
+
+Visitor analytics (GoAccess) write Combined logs to `logs/access.log` and a live HTML report to `logs/goaccess.html`. Open the dashboard at `http://<host>:8000/goaccess`. Port `7890` is the GoAccess WebSocket (not a website); keep it reachable for live updates. The dashboard is unauthenticated, matching the app's current trust model.
 
 ## Local Run (without Docker)
 
@@ -52,6 +54,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 2. Choose **Live CVM** or **Offline Mode**.
 3. Run analysis to load the storage tree.
 4. Use treemap selection, inspector, search, and legend filters to investigate usage and shared storage behavior.
+5. Open http://ipaddress:8000/goaccess to see who hit the app URL (unique visitors, user-agents, requested paths).
 
 ## Notes
 

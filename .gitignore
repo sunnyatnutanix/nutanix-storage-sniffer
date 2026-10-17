@@ -6,3 +6,5 @@ app/__pycache__/
 *.tmp
 tmp/
 .cursor/
+logs/*
+!logs/.gitkeep
