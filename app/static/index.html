@@ -34,6 +34,30 @@
             user-select: none;
         }
 
+        .copy-hover-icon {
+            display: inline-flex;
+            align-items: center;
+            margin-left: 0.3rem;
+            color: #7dd3fc;
+            vertical-align: middle;
+            pointer-events: none;
+        }
+        .copy-hover-icon svg {
+            width: 12px;
+            height: 12px;
+        }
+        .copied-label {
+            margin-left: 0.35rem;
+            color: #34d399;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            vertical-align: middle;
+        }
+        #inspector-summary .inspector-copy-target {
+            cursor: pointer;
+        }
+
         .resizer:hover, body.is-resizing .resizer {
             background-color: #0284c7;
             box-shadow: 0 0 10px rgba(2, 132, 199, 0.8);
@@ -406,7 +430,21 @@
             
             <!-- Top Hierarchy Section -->
             <div id="hierarchy-wrapper" class="flex flex-col min-h-[100px] overflow-hidden" style="flex: 1 1 0%;">
-                <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex-shrink-0 text-center">Storage Hierarchy</h2>
+                <button id="hierarchy-mode-toggle" type="button" onclick="toggleHierarchyViewMode()"
+                        class="w-full text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex-shrink-0 text-center hover:text-sky-300 cursor-pointer"
+                        title="Click to switch to chain view">Storage Hierarchy</button>
+                <div id="chain-sort-row" class="hidden mb-2 flex-shrink-0 flex items-center justify-center gap-1 text-[10px] whitespace-nowrap">
+                    <span class="text-slate-300 shrink-0 mr-1">order by</span>
+                    <button type="button" data-metric="logical_live" onclick="setChainSortMetric('logical_live')"
+                            title="Logical live usage"
+                            class="chain-metric-btn px-1.5 py-0.5 text-sky-300 font-semibold">Live</button>
+                    <button type="button" data-metric="logical_shared_clone" onclick="setChainSortMetric('logical_shared_clone')"
+                            title="Logical shared clone"
+                            class="chain-metric-btn px-1.5 py-0.5 text-slate-400 hover:text-sky-300">Clone</button>
+                    <button type="button" data-metric="physical_peg" onclick="setChainSortMetric('physical_peg')"
+                            title="PEG"
+                            class="chain-metric-btn px-1.5 py-0.5 text-slate-400 hover:text-sky-300">PEG</button>
+                </div>
                 <div id="hierarchy-tree-container" class="flex-1 overflow-y-auto pr-1 space-y-1 bg-slate-950 p-2 rounded border border-slate-800 font-sans">
                     <p class="text-xs text-slate-500 italic text-center">No storage pool loaded.</p>
                 </div>
@@ -419,7 +457,7 @@
 
             <!-- Middle Inspector Section -->
             <div id="inspector-wrapper" class="flex-1 flex flex-col min-h-[100px] mb-2 min-w-0 overflow-hidden flex-shrink-0">
-                <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex-shrink-0 text-center">Vdisk Inspector</h2>
+                <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex-shrink-0 text-center">Inspector</h2>
                 <div id="inspector" class="flex-1 bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs space-y-2 overflow-y-auto transition-all duration-200 custom-scrollbar">
                     <p class="text-slate-500 text-center">Connect to a CVM or load an offline diagnostic log file.</p>
                 </div>
@@ -480,6 +518,10 @@
     <script>
         let rawTreeData = null;
         let fullRootNode = null;
+        let hierarchyViewMode = "disk";
+        let chainSortMetric = "logical_live";
+        let savedChainExpandKeys = null;
+        let savedChainScrollTop = 0;
         let currentHierarchyNode = null;
         let isAnimating = false;
         let activeSearchQuery = "";
@@ -495,6 +537,8 @@
         let lineageChildrenByParent = new Map();
         let chainTreeVDiskIdsByChainId = new Map();
         let vdiskIdsByLineageId = new Map();
+        let chainParentById = new Map();
+        let chainChildrenById = new Map();
         let isAdvancedPropertiesOpen = false; // Persistent state for the dropdown
         let selectedNodeSignature = null;
         
@@ -1540,15 +1584,27 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             return Number.isFinite(ms) ? ms : null;
         }
 
-        function matchesTimeFilter(data, filter) {
-            if (!filter) return true;
-            const createdMs = getVdiskCreationMs(data);
+        function timestampInBounds(createdMs, bounds) {
             if (createdMs === null) return false;
-            const bounds = resolveTimeFilterBounds(filter);
-            if (!bounds) return false;
             if (bounds.startMs !== null && bounds.startMs !== undefined && createdMs < bounds.startMs) return false;
             if (bounds.endMs !== null && bounds.endMs !== undefined && createdMs > bounds.endMs) return false;
             return true;
+        }
+
+        function matchesTimeFilter(data, filter) {
+            if (!filter) return true;
+            const bounds = resolveTimeFilterBounds(filter);
+            if (!bounds) return false;
+            if (data && data.is_chain_hierarchy_node && Array.isArray(data.member_creation_usecs)) {
+                return data.member_creation_usecs.some(usecs => {
+                    if (usecs === undefined || usecs === null || usecs === "") return false;
+                    const ms = Math.floor(Number(usecs) / 1000);
+                    return timestampInBounds(Number.isFinite(ms) ? ms : null, bounds);
+                });
+            }
+            const createdMs = getVdiskCreationMs(data);
+            if (createdMs === null) return false;
+            return timestampInBounds(createdMs, bounds);
         }
 
         function formatTimeFilterLabel(filter) {
@@ -1620,6 +1676,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (q.startsWith("vdisk id:") || q.startsWith("vdisk:")) {
                 const targetVdiskId = q.replace(/^vdisk id:|^vdisk:/, "").trim();
                 if (data.vdisk_id && String(data.vdisk_id).toLowerCase().includes(targetVdiskId)) return true;
+                if (Array.isArray(data.vdisk_ids) && data.vdisk_ids.some(id => String(id).toLowerCase().includes(targetVdiskId))) return true;
                 return false;
             }
 
@@ -1656,6 +1713,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     if (cInfo.chain_ids && cInfo.chain_ids.some(id => String(id).includes(q))) return true;
                 }
             }
+            if (Array.isArray(data.vdisk_ids) && data.vdisk_ids.some(id => String(id).toLowerCase().includes(q))) return true;
 
             return false;
         }
@@ -1666,9 +1724,32 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (!query && !timeFilter) return false;
             if (query && timeFilter) return textOk && timeOk;
             if (query) return textOk;
+            if (data.is_chain_hierarchy_node) return timeOk;
             // time-only: only vdisk leaves can match
             if (data.vdisk_id === undefined || data.vdisk_id === null) return false;
             return timeOk;
+        }
+
+        function markSearchMatches(root, searching, query, timeFilter) {
+            let matchCount = 0;
+            function evaluate(n, ancestorMatched) {
+                const selfMatch = searching ? matchesSearchNode(n.data, query, timeFilter) : false;
+                const effectiveMatch = selfMatch || ancestorMatched;
+                let descendantMatch = false;
+                if (n.children) {
+                    for (const child of n.children) {
+                        if (evaluate(child, effectiveMatch)) descendantMatch = true;
+                    }
+                }
+                n.isSearchMatch = selfMatch;
+                n.isAncestorSearchMatch = ancestorMatched;
+                n.hasMatchingDescendant = descendantMatch;
+                n.isEffectiveSearchMatch = !searching || effectiveMatch || descendantMatch;
+                if (selfMatch) matchCount++;
+                return selfMatch || descendantMatch;
+            }
+            if (root) evaluate(root, false);
+            return matchCount;
         }
 
         function applySearchAndRender() {
@@ -1680,36 +1761,14 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (searching) breadcrumbMode = "keyword";
             updateBreadcrumbBarDisplay();
 
-            let matchCount = 0;
-
-            function evaluateSearchGlobal(n, ancestorMatched) {
-                let selfMatch = searching ? matchesSearchNode(n.data, query, timeFilter) : false;
-                let effectiveMatch = selfMatch || ancestorMatched;
-                
-                let descendantMatch = false;
-                if (n.children) {
-                    for (let child of n.children) {
-                        if (evaluateSearchGlobal(child, effectiveMatch)) {
-                            descendantMatch = true;
-                        }
-                    }
-                }
-                
-                n.isSearchMatch = selfMatch;
-                n.isAncestorSearchMatch = ancestorMatched;
-                n.hasMatchingDescendant = descendantMatch;
-                n.isEffectiveSearchMatch = !searching || effectiveMatch || descendantMatch;
-                
-                if (selfMatch) matchCount++;
-                return selfMatch || descendantMatch;
-            }
-
-            evaluateSearchGlobal(fullRootNode, false);
+            const matchCount = markSearchMatches(fullRootNode, searching, query, timeFilter);
 
             if (searching) document.getElementById("search-stats").textContent = `Found ${matchCount} matching entities.`;
             else document.getElementById("search-stats").textContent = "";
 
-            renderHierarchyTree(fullRootNode, searching);
+            const sidebarRoot = buildSidebarHierarchyRoot() || fullRootNode;
+            if (sidebarRoot !== fullRootNode) markSearchMatches(sidebarRoot, searching, query, timeFilter);
+            renderHierarchyTree(sidebarRoot, searching);
             
             if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
         }
@@ -1781,6 +1840,104 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             if (activeOfflineSectionIndex >= loadedOfflineSections.length) activeOfflineSectionIndex = 0;
             showOfflineSectionDetail(activeOfflineSectionIndex);
+        }
+
+        function writeClipboardText(text) {
+            return new Promise((resolve, reject) => {
+                const fallbackCopy = () => {
+                    const area = document.createElement("textarea");
+                    area.value = text;
+                    area.setAttribute("readonly", "");
+                    area.style.position = "fixed";
+                    area.style.left = "-9999px";
+                    document.body.appendChild(area);
+                    area.select();
+                    let ok = false;
+                    try { ok = document.execCommand("copy"); } catch (err) { ok = false; }
+                    document.body.removeChild(area);
+                    if (ok) resolve();
+                    else reject(new Error("copy failed"));
+                };
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(resolve).catch(fallbackCopy);
+                } else {
+                    fallbackCopy();
+                }
+            });
+        }
+
+        function inspectorCopyTarget(node) {
+            let el = node && node.nodeType === 1 ? node : (node && node.parentElement);
+            if (!el || !el.closest("#inspector-summary")) return null;
+            if (el.closest("button, a, summary, #inspector-advanced")) return null;
+            if (el.classList.contains("copy-hover-icon") || el.classList.contains("copied-label")) el = el.parentElement;
+            const span = el.closest("span");
+            if (span && span.closest("#inspector-summary") && !span.classList.contains("copy-hover-icon") && !span.classList.contains("copied-label")) {
+                return span;
+            }
+            const row = el.closest("div");
+            if (row && row.id !== "inspector-summary" && row.closest("#inspector-summary")) return row;
+            return null;
+        }
+
+        function inspectorCopyText(el) {
+            const clone = el.cloneNode(true);
+            clone.querySelectorAll(".copy-hover-icon, .copied-label").forEach(node => node.remove());
+            return (clone.innerText || clone.textContent || "").replace(/\s+/g, " ").trim();
+        }
+
+        function showInspectorCopyIcon(target) {
+            const zone = document.getElementById("inspector-summary");
+            if (!zone || !target) return;
+            zone.querySelectorAll(".copy-hover-icon").forEach(icon => {
+                if (icon.parentElement !== target) icon.remove();
+            });
+            if (target.querySelector(".copy-hover-icon") || target.querySelector(".copied-label")) return;
+            const icon = document.createElement("span");
+            icon.className = "copy-hover-icon";
+            icon.setAttribute("aria-hidden", "true");
+            icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+            target.appendChild(icon);
+            target.classList.add("inspector-copy-target");
+        }
+
+        function showInspectorCopied(target) {
+            target.querySelectorAll(".copy-hover-icon").forEach(icon => icon.remove());
+            let label = target.querySelector(".copied-label");
+            if (!label) {
+                label = document.createElement("span");
+                label.className = "copied-label";
+                target.appendChild(label);
+            }
+            label.textContent = "copied";
+            clearTimeout(target._copiedTimer);
+            target._copiedTimer = setTimeout(() => label.remove(), 1000);
+        }
+
+        function bindInspectorCopy() {
+            const zone = document.getElementById("inspector-summary");
+            if (!zone || zone.dataset.copyBound === "1") return;
+            zone.dataset.copyBound = "1";
+            zone.addEventListener("mouseover", (event) => {
+                const target = inspectorCopyTarget(event.target);
+                if (target) showInspectorCopyIcon(target);
+            });
+            zone.addEventListener("mouseout", (event) => {
+                const target = inspectorCopyTarget(event.target);
+                if (!target || target.contains(event.relatedTarget)) return;
+                const icon = target.querySelector(".copy-hover-icon");
+                if (icon) icon.remove();
+            });
+            zone.addEventListener("click", (event) => {
+                if (event.target.closest("button, a, summary")) return;
+                const target = inspectorCopyTarget(event.target);
+                if (!target) return;
+                const text = inspectorCopyText(target);
+                if (!text) return;
+                event.preventDefault();
+                event.stopPropagation();
+                writeClipboardText(text).then(() => showInspectorCopied(target));
+            });
         }
 
         function escapeHtml(value) {
@@ -2572,6 +2729,373 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
         }
 
+        function hierarchyExpandKey(d3Node) {
+            const parts = [];
+            let curr = d3Node;
+            while (curr) {
+                const data = curr.data || {};
+                let part;
+                if (data.is_chain_hierarchy_node) part = `chain:${data.chain_id || ""}`;
+                else if (data.is_unmapped_chain_folder) part = "unmapped";
+                else if (data.container_id !== undefined && data.container_id !== null && String(data.container_id).trim() !== "") part = `ctr:${data.container_id}`;
+                else if (data.vdisk_id !== undefined && data.vdisk_id !== null && String(data.vdisk_id).trim() !== "") part = `vd:${data.vdisk_id}`;
+                else part = `name:${data.name || ""}`;
+                parts.push(part);
+                curr = curr.parent;
+            }
+            return parts.reverse().join("\u001f");
+        }
+
+        function captureChainExpandState() {
+            const container = document.getElementById("hierarchy-tree-container");
+            if (!container) return;
+            const keys = new Set();
+            container.querySelectorAll(".tree-node-wrapper").forEach(wrapper => {
+                const childrenEl = wrapper.querySelector(":scope > .tree-children");
+                if (!childrenEl || childrenEl.classList.contains("hidden")) return;
+                if (wrapper.dataset.expandKey) keys.add(wrapper.dataset.expandKey);
+            });
+            savedChainExpandKeys = keys;
+            savedChainScrollTop = container.scrollTop;
+        }
+
+        function restoreChainExpandState(container) {
+            if (!container || !savedChainExpandKeys) return;
+            container.querySelectorAll(".tree-node-wrapper").forEach(wrapper => {
+                if (!savedChainExpandKeys.has(wrapper.dataset.expandKey || "")) return;
+                const childrenEl = wrapper.querySelector(":scope > .tree-children");
+                const caretBtn = wrapper.querySelector(":scope > .tree-row .caret-btn");
+                if (childrenEl && caretBtn) toggleTreeNodeExpand(wrapper, childrenEl, caretBtn, true);
+            });
+            container.scrollTop = savedChainScrollTop;
+        }
+
+        function toggleHierarchyViewMode() {
+            if (hierarchyViewMode === "chain") captureChainExpandState();
+            hierarchyViewMode = hierarchyViewMode === "chain" ? "disk" : "chain";
+            updateHierarchyModeControls();
+            if (fullRootNode) applySearchAndRender();
+        }
+
+        function setChainSortMetric(metric) {
+            if (metric !== "logical_live" && metric !== "logical_shared_clone" && metric !== "physical_peg") return;
+            chainSortMetric = metric;
+            updateChainMetricButtons();
+            if (hierarchyViewMode === "chain" && fullRootNode) refreshChainMetricDisplay();
+        }
+
+        function chainMetricDatasetKey(metric) {
+            if (metric === "logical_shared_clone") return "logicalSharedClone";
+            if (metric === "physical_peg") return "physicalPeg";
+            return "logicalLive";
+        }
+
+        function updateChainMetricButtons() {
+            document.querySelectorAll(".chain-metric-btn").forEach(btn => {
+                const active = btn.dataset.metric === chainSortMetric;
+                btn.className = active
+                    ? "chain-metric-btn px-1.5 py-0.5 text-sky-300 font-semibold"
+                    : "chain-metric-btn px-1.5 py-0.5 text-slate-400 hover:text-sky-300";
+            });
+        }
+
+        function refreshChainMetricDisplay() {
+            const container = document.getElementById("hierarchy-tree-container");
+            if (!container) return;
+            const key = chainMetricDatasetKey(chainSortMetric);
+            container.querySelectorAll(".tree-children").forEach(childrenEl => {
+                const wrappers = Array.from(childrenEl.children);
+                const chainWrappers = [];
+                const others = [];
+                wrappers.forEach(wrapper => {
+                    const row = wrapper.querySelector(":scope > .tree-row");
+                    if (row && row.dataset.chainRow === "1") chainWrappers.push(wrapper);
+                    else others.push(wrapper);
+                });
+                if (!chainWrappers.length) return;
+                chainWrappers.sort((a, b) => {
+                    const aRow = a.querySelector(":scope > .tree-row");
+                    const bRow = b.querySelector(":scope > .tree-row");
+                    const av = Number(aRow.dataset[key] || 0);
+                    const bv = Number(bRow.dataset[key] || 0);
+                    if (bv !== av) return bv - av;
+                    const aName = aRow.querySelector(".name") ? aRow.querySelector(".name").textContent : "";
+                    const bName = bRow.querySelector(".name") ? bRow.querySelector(".name").textContent : "";
+                    return String(aName).localeCompare(String(bName));
+                });
+                chainWrappers.forEach(wrapper => {
+                    const row = wrapper.querySelector(":scope > .tree-row");
+                    const bytes = Number(row.dataset[key] || 0);
+                    const sizeEl = row.querySelector(".size");
+                    if (sizeEl) sizeEl.textContent = formatBytes(bytes);
+                    childrenEl.appendChild(wrapper);
+                });
+                others.forEach(wrapper => childrenEl.appendChild(wrapper));
+            });
+            container.querySelectorAll("[data-unmapped-folder='1']").forEach(row => {
+                const wrapper = row.parentElement;
+                const childrenEl = wrapper && wrapper.querySelector(":scope > .tree-children");
+                if (!childrenEl) return;
+                let sum = 0;
+                childrenEl.querySelectorAll(":scope > .tree-node-wrapper > .tree-row[data-chain-row='1']").forEach(chainRow => {
+                    sum += Number(chainRow.dataset[key] || 0);
+                });
+                const sizeEl = row.querySelector(".size");
+                if (sizeEl) sizeEl.textContent = formatBytes(sum);
+            });
+        }
+
+        function updateHierarchyModeControls() {
+            const heading = document.getElementById("hierarchy-mode-toggle");
+            const sortRow = document.getElementById("chain-sort-row");
+            const isChain = hierarchyViewMode === "chain";
+            if (heading) {
+                heading.textContent = isChain ? "Chain Hierarchy" : "Storage Hierarchy";
+                heading.title = isChain ? "Click to switch to disk view" : "Click to switch to chain view";
+            }
+            if (sortRow) sortRow.classList.toggle("hidden", !isChain);
+            updateChainMetricButtons();
+        }
+
+        function isRealVdiskLeaf(data) {
+            if (!data || typeof data !== "object") return false;
+            if (data.vdisk_id === undefined || data.vdisk_id === null || data.vdisk_id === "") return false;
+            if (data.is_shared_parent_vdisk || data.is_shared_clone_block || data.is_chain_snap_share_block) return false;
+            if (data.is_partial_extents_block || data.is_total_garbage_block || data.is_explicit_reserve_block) return false;
+            if (data.is_free || data.is_chain_hierarchy_node) return false;
+            if (Array.isArray(data.children) && data.children.length > 0) return false;
+            return true;
+        }
+
+        function chainMetricBytes(stats) {
+            const source = stats || {};
+            const value = Number(source[chainSortMetric] || 0);
+            return Number.isFinite(value) ? value : 0;
+        }
+
+        function collapseVdisksToChainRows(vdisks) {
+            const byChain = new Map();
+            const unchained = [];
+            const statKeys = ["logical_live", "logical_shared_clone", "physical_peg", "logical_exclusive", "logical_exclusive_snapshot"];
+            vdisks.forEach(vd => {
+                const cid = String(vd.chain_id || "").trim();
+                if (!cid) {
+                    unchained.push({ ...vd });
+                    return;
+                }
+                let row = byChain.get(cid);
+                const stats = vd.chain_stats || {};
+                if (!row) {
+                    row = {
+                        name: cid,
+                        chain_id: cid,
+                        is_chain_hierarchy_node: true,
+                        vdisk_id: null,
+                        vdisk_ids: [],
+                        member_creation_usecs: [],
+                        chain_stats: {
+                            logical_live: 0,
+                            logical_shared_clone: 0,
+                            physical_peg: 0,
+                            logical_exclusive: 0,
+                            logical_exclusive_snapshot: 0,
+                        },
+                        container_name: vd.container_name || null,
+                        mapped_entity_name: vd.mapped_entity_name || null,
+                    };
+                    byChain.set(cid, row);
+                }
+                row.vdisk_ids.push(String(vd.vdisk_id));
+                const usecs = vd.vdisk_creation_time_usecs ?? vd.creation_time_usecs;
+                if (usecs !== undefined && usecs !== null && usecs !== "") row.member_creation_usecs.push(usecs);
+                statKeys.forEach(key => {
+                    const next = Number(stats[key] || 0);
+                    if (Number.isFinite(next) && next > row.chain_stats[key]) row.chain_stats[key] = next;
+                });
+            });
+            const chains = Array.from(byChain.values());
+            chains.forEach(row => {
+                row.vdisk_ids.sort((a, b) => (Number(a) - Number(b)) || String(a).localeCompare(String(b)));
+                row.vdisk_count = row.vdisk_ids.length;
+                const bytes = chainMetricBytes(row.chain_stats);
+                row.real_bytes = bytes;
+                row.value = bytes > 0 ? bytes : 1;
+                row.formatted_size = formatBytes(bytes);
+            });
+            chains.sort((a, b) => {
+                const diff = chainMetricBytes(b.chain_stats) - chainMetricBytes(a.chain_stats);
+                if (diff !== 0) return diff;
+                return String(a.chain_id).localeCompare(String(b.chain_id));
+            });
+            unchained.sort((a, b) => Number(b.real_bytes || 0) - Number(a.real_bytes || 0));
+            return chains.concat(unchained);
+        }
+
+        let chainStatsById = null;
+
+        function isMappedEntityGroup(name) {
+            const label = String(name || "");
+            return label.startsWith("VM:")
+                || label.startsWith("VG:")
+                || label === "Snapshots"
+                || label === "Recycle Bin"
+                || label === "Pending Deletion (to_remove)"
+                || label === "VDisks"
+                || label === "Other VDisks";
+        }
+
+        function isTrailingStorageGroup(name) {
+            const label = String(name || "");
+            return label === "Shared Storage"
+                || label === "Chain Snap Share"
+                || label === "Partial Extents"
+                || label === "Total Garbage w/o PEG"
+                || label === "Reserved Available Space";
+        }
+
+        function emptyChainStats() {
+            return {
+                logical_live: 0,
+                logical_shared_clone: 0,
+                physical_peg: 0,
+                logical_exclusive: 0,
+                logical_exclusive_snapshot: 0,
+            };
+        }
+
+        function rememberChainStats(index, chainId, stats) {
+            const cid = String(chainId || "").trim();
+            if (!cid || !stats || typeof stats !== "object") return;
+            let row = index.get(cid);
+            if (!row) {
+                row = emptyChainStats();
+                index.set(cid, row);
+            }
+            Object.keys(row).forEach(key => {
+                const next = Number(stats[key] || 0);
+                if (Number.isFinite(next) && next > row[key]) row[key] = next;
+            });
+        }
+
+        function chainStatsIndex() {
+            if (chainStatsById) return chainStatsById;
+            const index = new Map();
+            function walk(node) {
+                if (!node || typeof node !== "object") return;
+                rememberChainStats(index, node.chain_id, node.chain_stats);
+                (node.children || []).forEach(walk);
+            }
+            if (fullRootNode && fullRootNode.data) walk(fullRootNode.data);
+            chainStatsById = index;
+            return index;
+        }
+
+        function collectShownEntityChainIds(children) {
+            const ids = new Set();
+            function walk(node) {
+                if (!node || typeof node !== "object") return;
+                if (node.is_chain_hierarchy_node && node.chain_id) ids.add(String(node.chain_id));
+                (node.children || []).forEach(walk);
+            }
+            (children || []).forEach(child => {
+                if (isMappedEntityGroup(child && child.name)) walk(child);
+            });
+            return ids;
+        }
+
+        function collectContainerChainIds(container) {
+            const ids = new Set();
+            const add = (chainId) => {
+                const cid = String(chainId || "").trim();
+                if (cid) ids.add(cid);
+            };
+            (container.chain_trees || []).forEach(tree => {
+                if (!tree) return;
+                add(tree.root_chain_id);
+                (tree.member_chain_ids || []).forEach(add);
+                (tree.leaf_chain_ids || []).forEach(add);
+            });
+            return ids;
+        }
+
+        function buildUnmappedChainRow(chainId, stats, containerName) {
+            const chainStats = emptyChainStats();
+            Object.keys(chainStats).forEach(key => {
+                const next = Number((stats && stats[key]) || 0);
+                chainStats[key] = Number.isFinite(next) ? next : 0;
+            });
+            const bytes = chainMetricBytes(chainStats);
+            return {
+                name: chainId,
+                chain_id: chainId,
+                is_chain_hierarchy_node: true,
+                is_unmapped_chain: true,
+                vdisk_id: null,
+                vdisk_ids: [],
+                vdisk_count: 0,
+                member_creation_usecs: [],
+                chain_stats: chainStats,
+                container_name: containerName || null,
+                real_bytes: bytes,
+                value: bytes > 0 ? bytes : 1,
+                formatted_size: formatBytes(bytes),
+            };
+        }
+
+        function buildUnmappedChainsFolder(container, children) {
+            const shown = collectShownEntityChainIds(children);
+            const missing = [];
+            collectContainerChainIds(container).forEach(cid => {
+                if (!shown.has(cid)) missing.push(cid);
+            });
+            if (!missing.length) return null;
+            const statsIndex = chainStatsIndex();
+            const rows = missing.map(cid => buildUnmappedChainRow(cid, statsIndex.get(cid), container.name));
+            rows.sort((a, b) => {
+                const diff = chainMetricBytes(b.chain_stats) - chainMetricBytes(a.chain_stats);
+                if (diff !== 0) return diff;
+                return String(a.chain_id).localeCompare(String(b.chain_id));
+            });
+            const total = rows.reduce((sum, row) => sum + chainMetricBytes(row.chain_stats), 0);
+            return {
+                name: "Unmapped Chains",
+                is_unmapped_chain_folder: true,
+                container_name: container.name || null,
+                real_bytes: total,
+                value: total > 0 ? total : 1,
+                formatted_size: formatBytes(total),
+                children: rows,
+            };
+        }
+
+        function buildChainHierarchyData(node) {
+            if (!node || typeof node !== "object") return node;
+            const clone = { ...node };
+            const children = Array.isArray(node.children) ? node.children : null;
+            if (!children) return clone;
+            if (children.length > 0 && children.every(isRealVdiskLeaf)) {
+                clone.children = collapseVdisksToChainRows(children);
+                return clone;
+            }
+            clone.children = children.map(child => buildChainHierarchyData(child));
+            if (node.container_id !== undefined && node.container_id !== null && Array.isArray(node.chain_trees)) {
+                const folder = buildUnmappedChainsFolder(node, clone.children);
+                if (folder) {
+                    const insertAt = clone.children.findIndex(child => isTrailingStorageGroup(child && child.name));
+                    if (insertAt < 0) clone.children.push(folder);
+                    else clone.children.splice(insertAt, 0, folder);
+                }
+            }
+            return clone;
+        }
+
+        function buildSidebarHierarchyRoot() {
+            if (!fullRootNode) return null;
+            if (hierarchyViewMode !== "chain") return fullRootNode;
+            chainStatsById = null;
+            return d3.hierarchy(buildChainHierarchyData(fullRootNode.data));
+        }
+
         function renderHierarchyTree(rootD3Node, isFiltering = false) {
             const container = document.getElementById("hierarchy-tree-container");
             container.innerHTML = "";
@@ -2579,6 +3103,12 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             const treeDOM = createTreeNodeDOM(rootD3Node, isFiltering);
             if (treeDOM) container.appendChild(treeDOM);
+
+            const restoreChain = hierarchyViewMode === "chain" && savedChainExpandKeys;
+            if (restoreChain) {
+                restoreChainExpandState(container);
+                if (!isFiltering) return;
+            }
 
             if (!isFiltering) {
                 const usedSpaceNode = findNodeByName(rootD3Node, rootD3Node.data.children ? rootD3Node.data.children[0].name : "");
@@ -2598,6 +3128,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (d3Node.data.name.includes("to_remove") || d3Node.data.is_to_remove) return "🗑️";
             if (d3Node.data.name === "Snapshots") return "📁";
             if (d3Node.data.name.includes("Other VDisks")) return "⛃";
+            if (d3Node.data.is_chain_hierarchy_node) return "⛓️";
             if (d3Node.data.vdisk_id || !d3Node.children) return "🗃️";
             return "📁";
         }
@@ -2617,11 +3148,15 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             const wrapper = document.createElement("div");
             wrapper.className = "tree-node-wrapper select-none";
+            wrapper.dataset.expandKey = hierarchyExpandKey(d3Node);
 
             const hasChildren = d3Node.children && d3Node.children.length > 0;
             const realSum = getRealNodeSum(d3Node);
             const displaySize = formatBytes(realSum);
             const icon = getNodeIcon(d3Node);
+            const chainTitle = d3Node.data.is_chain_hierarchy_node
+                ? ` title="${escapeHtml(d3Node.data.chain_id || d3Node.data.name || "")}"`
+                : "";
 
             const row = document.createElement("div");
             row.className = "tree-row flex items-center px-1.5 py-1 text-xs hover:bg-slate-700/60 rounded cursor-pointer group transition-colors my-0.5 border border-transparent";
@@ -2638,9 +3173,18 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     </svg>
                 </button>
                 <span class="mr-1.5 text-sm flex-shrink-0">${icon}</span>
-                <span class="name flex-1 truncate text-slate-300 group-hover:text-sky-300 font-medium">${getDisplayNodeName(d3Node.data)}</span>
+                <span class="name flex-1 truncate text-slate-300 group-hover:text-sky-300 font-medium"${chainTitle}>${getDisplayNodeName(d3Node.data)}</span>
                 <span class="size text-[10px] font-mono text-slate-400 ml-1 flex-shrink-0">${displaySize}</span>
             `;
+            if (d3Node.data.is_chain_hierarchy_node) {
+                const stats = d3Node.data.chain_stats || {};
+                row.dataset.chainRow = "1";
+                row.dataset.logicalLive = String(Number(stats.logical_live || 0));
+                row.dataset.logicalSharedClone = String(Number(stats.logical_shared_clone || 0));
+                row.dataset.physicalPeg = String(Number(stats.physical_peg || 0));
+                row.dataset.chainId = String(d3Node.data.chain_id || "");
+            }
+            if (d3Node.data.is_unmapped_chain_folder) row.dataset.unmappedFolder = "1";
 
             wrapper.appendChild(row);
 
@@ -3480,6 +4024,82 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     });
                 });
             });
+            rebuildChainFamilyIndex();
+        }
+
+        function isIndexableChainVdisk(info) {
+            if (!info) return false;
+            if (info.vdisk_id === undefined || info.vdisk_id === null || info.vdisk_id === "") return false;
+            if (info.is_shared_parent_vdisk || info.is_shared_clone_block || info.is_chain_snap_share_block) return false;
+            if (info.is_chain_hierarchy_node || info.is_partial_extents_block || info.is_total_garbage_block || info.is_explicit_reserve_block) return false;
+            if (info.is_free) return false;
+            return true;
+        }
+
+        function pickChainParentVote(votes) {
+            let best = "";
+            let bestCount = -1;
+            votes.forEach((count, chainId) => {
+                if (count > bestCount || (count === bestCount && chainId.localeCompare(best) < 0)) {
+                    best = chainId;
+                    bestCount = count;
+                }
+            });
+            return best;
+        }
+
+        function rebuildChainFamilyIndex() {
+            chainParentById = new Map();
+            chainChildrenById = new Map();
+            if (!fullRootNode) return;
+
+            const vdiskById = new Map();
+            fullRootNode.each(n => {
+                const info = n.data || {};
+                if (!isIndexableChainVdisk(info)) return;
+                const vid = String(info.vdisk_id);
+                if (!vdiskById.has(vid)) vdiskById.set(vid, info);
+            });
+
+            const votesByChain = new Map();
+            vdiskById.forEach(info => {
+                const own = String(info.chain_id || "").trim();
+                if (!own) return;
+                if (!votesByChain.has(own)) votesByChain.set(own, { explicit: new Map(), inferred: new Map() });
+                const bucket = votesByChain.get(own);
+                const explicit = String(info.parent_chain_id || "").trim();
+                if (explicit && explicit !== own) {
+                    bucket.explicit.set(explicit, (bucket.explicit.get(explicit) || 0) + 1);
+                    return;
+                }
+                const parentVid = info.parent_vdisk_id !== undefined && info.parent_vdisk_id !== null
+                    ? String(info.parent_vdisk_id).trim()
+                    : "";
+                if (!parentVid || parentVid === "0" || parentVid === "n/a") return;
+                const parentInfo = vdiskById.get(parentVid);
+                const inferred = parentInfo ? String(parentInfo.chain_id || "").trim() : "";
+                if (inferred && inferred !== own) {
+                    bucket.inferred.set(inferred, (bucket.inferred.get(inferred) || 0) + 1);
+                }
+            });
+
+            votesByChain.forEach((bucket, chainId) => {
+                const parent = pickChainParentVote(bucket.explicit) || pickChainParentVote(bucket.inferred);
+                if (parent) chainParentById.set(chainId, parent);
+            });
+
+            chainParentById.forEach((parent, child) => {
+                if (!chainChildrenById.has(parent)) chainChildrenById.set(parent, []);
+                chainChildrenById.get(parent).push(child);
+            });
+            chainChildrenById.forEach(children => {
+                children.sort((a, b) => a.localeCompare(b));
+            });
+        }
+
+        function chainMetricBytesForId(chainId) {
+            const stats = chainStatsIndex().get(String(chainId || "")) || emptyChainStats();
+            return chainMetricBytes(stats);
         }
 
         function collectLineageVDiskIds(seedVdiskId) {
@@ -3709,11 +4329,79 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             return html;
         }
 
+        function highlightChainHierarchyRow(chainId) {
+            if (hierarchyViewMode !== "chain") return;
+            const cid = String(chainId || "");
+            document.querySelectorAll("#hierarchy-tree-container .tree-row").forEach(el => {
+                el.classList.remove("bg-sky-600/30", "border-sky-500", "text-sky-300", "font-bold");
+            });
+            const matches = [];
+            document.querySelectorAll("#hierarchy-tree-container .tree-row[data-chain-id]").forEach(row => {
+                if (row.dataset.chainId === cid) matches.push(row);
+            });
+            matches.forEach(row => {
+                row.classList.add("bg-sky-600/30", "border-sky-500", "text-sky-300", "font-bold");
+                let wrapper = row.parentElement;
+                while (wrapper && wrapper.id !== "hierarchy-tree-container") {
+                    if (wrapper.classList && wrapper.classList.contains("tree-node-wrapper")) {
+                        const parentChildren = wrapper.parentElement;
+                        if (parentChildren && parentChildren.classList.contains("tree-children")) {
+                            parentChildren.classList.remove("hidden");
+                            const parentRow = parentChildren.parentElement
+                                ? parentChildren.parentElement.querySelector(":scope > .tree-row")
+                                : null;
+                            const caret = parentRow ? parentRow.querySelector(".caret-icon") : null;
+                            if (caret) caret.classList.add("rotate-90");
+                        }
+                    }
+                    wrapper = wrapper.parentElement;
+                }
+            });
+            if (matches[0]) matches[0].scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }
+
+        function selectChainById(chainId) {
+            const cid = String(chainId || "").trim();
+            if (!cid || !fullRootNode) return;
+            const stats = chainStatsIndex().get(cid) || emptyChainStats();
+            const vdiskIds = collectChainVDiskRows(cid).map(row => row.id);
+            const bytes = chainMetricBytes(stats);
+            inspectNode({
+                data: {
+                    name: cid,
+                    chain_id: cid,
+                    is_chain_hierarchy_node: true,
+                    vdisk_id: null,
+                    vdisk_ids: vdiskIds,
+                    vdisk_count: vdiskIds.length,
+                    chain_stats: stats,
+                    real_bytes: bytes,
+                    formatted_size: formatBytes(bytes),
+                },
+            });
+            highlightChainHierarchyRow(cid);
+        }
+
+        function applyActiveChainHierarchyHighlight(info) {
+            activeMemberChainIds.clear();
+            activeChainVDiskIds.clear();
+            activeLineageId = null;
+            const cid = info && info.chain_id ? String(info.chain_id) : "";
+            activeChainId = cid || null;
+            if (!cid) return;
+            collectChainVDiskRows(cid).forEach(row => activeChainVDiskIds.add(String(row.id)));
+            if (activeChainVDiskIds.size === 0 && Array.isArray(info.vdisk_ids)) {
+                info.vdisk_ids.forEach(id => activeChainVDiskIds.add(String(id)));
+            }
+        }
+
         function inspectNode(d) {
             if (!d) return;
             const inspector = document.getElementById("inspector");
             const info = d.data;
-            if (info.vdisk_id !== undefined && info.vdisk_id !== null) {
+            if (info.is_chain_hierarchy_node) {
+                selectedNodeSignature = { type: "chain_hierarchy", chainId: String(info.chain_id || "") };
+            } else if (info.vdisk_id !== undefined && info.vdisk_id !== null) {
                 selectedNodeSignature = { type: "vdisk", id: String(info.vdisk_id) };
             } else if (info.is_shared_clone_block) {
                 selectedNodeSignature = { type: "shared_block", chainId: String(info.chain_id || "") };
@@ -3732,7 +4420,9 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const logicalSum = getLogicalNodeSum(d);
             const vdiskSizeSum = getVdiskSizeSum(d);
 
-            if (info.is_shared_clone_block || info.is_shared_parent_vdisk) {
+            if (info.is_chain_hierarchy_node) {
+                applyActiveChainHierarchyHighlight(info);
+            } else if (info.is_shared_clone_block || info.is_shared_parent_vdisk) {
                 applyActiveSharedChainBlockHighlight(info);
             } else if (info.is_chain_snap_share_block) {
                 applyActiveLineageFromNodeData(info);
@@ -3742,7 +4432,8 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
             
-            let nodeTypeLabel = info.is_free ? 'Free Storage Space' :
+            let nodeTypeLabel = info.is_chain_hierarchy_node ? 'VDisk Chain' :
+                info.is_free ? 'Free Storage Space' :
                 info.is_to_remove ? 'Pending Deletion VDisk' :
                 info.is_shared_clone_block ? 'Shared Clone / Snapshot Block' :
                 info.is_chain_snap_share_block ? 'Chain Snap Share Block' :
@@ -3759,7 +4450,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
 
             let fieldsHtml = `
-                <div class="font-bold text-sky-400 text-sm border-b border-slate-700 pb-1 mb-2 break-all">${getDisplayNodeName(info)}</div>
+                <div class="font-bold text-sky-400 text-sm border-b border-slate-700 pb-1 mb-2 break-all">${escapeHtml(getDisplayNodeName(info))}</div>
                 <div><span class="text-slate-400">Node Type:</span> ${nodeTypeLabel}</div>
             `;
 
@@ -3853,7 +4544,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 fieldsHtml += `
                     <div class="mt-2 p-2.5 bg-slate-950/70 border border-indigo-500/40 rounded-lg space-y-1.5 font-sans">
                         <div class="text-xs font-bold text-indigo-300 border-b border-slate-800 pb-1">Chain Snap Share</div>
-                        <div class="flex justify-between items-center"><span class="text-slate-400">Chain ID:</span> <span class="font-mono text-slate-200 text-[10px] break-all">${valOrNa(info.chain_id || info.name)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Chain ID:</span> <span class="font-mono text-slate-200 text-[10px] break-all">${escapeHtml(valOrNa(info.chain_id || info.name))}</span></div>
                         <div class="flex justify-between items-center"><span class="text-slate-400">Snap Share:</span> <span class="font-mono text-amber-300 font-bold text-xs">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
                         <div class="flex justify-between items-center"><span class="text-slate-400">Logical Live:</span> <span class="font-mono text-sky-300 font-bold">${formatBytes(terms.logical_live || 0)}</span></div>
                         <div class="flex justify-between items-center"><span class="text-slate-400">Logical Shared Clone:</span> <span class="font-mono text-emerald-300 font-bold">${formatBytes(terms.logical_shared_clone || 0)}</span></div>
@@ -3978,11 +4669,60 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     </div>
                 `;
 
+            } else if (info.is_chain_hierarchy_node) {
+                const stats = info.chain_stats || {};
+                const ids = Array.isArray(info.vdisk_ids) ? info.vdisk_ids : [];
+                fieldsHtml += `
+                    <div class="mt-2 p-2.5 bg-slate-950/70 border border-sky-500/40 rounded-lg space-y-1.5 font-sans">
+                        <div class="text-xs font-bold text-sky-300 border-b border-slate-800 pb-1">VDisk Chain</div>
+                        <div class="flex justify-between items-start gap-2"><span class="text-slate-400 shrink-0">Chain ID:</span> <span class="font-mono text-slate-200 text-[10px] break-all text-right">${escapeHtml(valOrNa(info.chain_id))}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">VDisks:</span> <span class="font-mono text-slate-200 font-bold">${ids.length}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Logical Live:</span> <span class="font-mono text-sky-300 font-bold">${formatBytes(stats.logical_live || 0)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Logical Shared Clone:</span> <span class="font-mono text-emerald-300 font-bold">${formatBytes(stats.logical_shared_clone || 0)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">PEG:</span> <span class="font-mono text-amber-300 font-bold">${formatBytes(stats.physical_peg || 0)}</span></div>
+                        ${(() => {
+                            const currentChainId = String(info.chain_id || "");
+                            const parentId = chainParentById.get(currentChainId) || "";
+                            const childIds = chainChildrenById.get(currentChainId) || [];
+                            return `
+                                <div class="mt-2 p-2 bg-slate-950/70 border border-emerald-500/30 rounded-lg space-y-1 text-[11px]">
+                                    <div class="font-bold text-emerald-300 border-b border-slate-800 pb-0.5 mb-1">Family</div>
+                                    <div><span class="text-slate-400">Parent:</span>
+                                        ${parentId
+                                            ? `<button onclick="selectChainById('${escapeHtml(parentId)}')" class="ml-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 hover:bg-sky-900 text-sky-300 font-mono text-[10px] break-all">${escapeHtml(parentId)}</button> <span class="ml-1 font-mono text-amber-300">${formatBytes(chainMetricBytesForId(parentId))}</span>`
+                                            : '<span class="font-mono text-slate-500">n/a</span>'}
+                                    </div>
+                                    <div class="pt-1 border-t border-slate-800">
+                                        <div class="text-slate-400 mb-1">Children:</div>
+                                        ${childIds.length ? childIds.map((childId, idx) => `
+                                            <button onclick="selectChainById('${escapeHtml(childId)}')" class="w-full text-left mb-1 px-2 py-1 rounded border border-slate-700 bg-slate-900 hover:bg-sky-900 text-slate-200 font-mono text-[10px]">
+                                                ${idx + 1}. ${escapeHtml(childId)}
+                                                <span class="ml-2 text-amber-300">${formatBytes(chainMetricBytesForId(childId))}</span>
+                                            </button>
+                                        `).join("") : `<div class="text-slate-500 italic">No children</div>`}
+                                    </div>
+                                </div>
+                            `;
+                        })()}
+                        <div class="mt-2 pt-2 border-t border-slate-800 space-y-1">
+                            <div class="text-[10px] text-slate-400 font-medium">VDisks in this chain:</div>
+                            <div class="space-y-1 max-h-36 overflow-y-auto pr-1">
+                                ${ids.length ? ids.map((vdId, idx) => `
+                                    <button onclick="selectChainVDisk('${escapeHtml(vdId)}')"
+                                            class="w-full text-left px-2 py-1 rounded border flex items-center justify-between font-mono text-[10px] bg-slate-800 hover:bg-sky-600 text-slate-200 border-slate-700 transition">
+                                        <span>${idx + 1}. ${escapeHtml(vdId)}</span>
+                                        <span class="text-[9px] text-sky-300">Click to view</span>
+                                    </button>
+                                `).join("") : `<div class="text-slate-500 text-[10px] italic">No associated VDisks found</div>`}
+                            </div>
+                        </div>
+                    </div>
+                `;
             } else if (info.vdisk_id || info.vdisk_uuid || info.vdisk_name || !info.children) {
                 // === BASIC GROUP ===
                 const directChildren = collectDirectChildVDiskIds(info.vdisk_id);
                 fieldsHtml += `
-                    <div><span class="text-slate-400">VDisk ID:</span> <span class="font-mono text-slate-200">${valOrNa(info.vdisk_id)}</span></div>
+                    <div><span class="text-slate-400">VDisk ID:</span> <span class="font-mono text-slate-200">${escapeHtml(valOrNa(info.vdisk_id))}</span></div>
                     <div><span class="text-slate-400">VDisk Name:</span> <span class="font-mono text-slate-200 break-all">${valOrNa(info.vdisk_name)}</span></div>
                     <div><span class="text-slate-400">Provisioned Size:</span> <span class="font-mono text-emerald-400 font-bold">${info.vdisk_size !== undefined ? formatBytes(info.vdisk_size) : "n/a"}</span></div>
                     <div><span class="text-slate-400">Physical Usage:</span> <span class="font-mono text-emerald-300 font-bold">${info.real_bytes !== undefined ? formatBytes(info.real_bytes) : valOrNa(info.formatted_size)}</span></div>
@@ -3997,7 +4737,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     <div><span class="text-slate-400">To Remove:</span> <span class="font-mono ${(info.is_to_remove ?? info.to_remove) ? 'text-rose-400 font-bold' : 'text-slate-200'}">${valOrNa(info.is_to_remove ?? info.to_remove)}</span></div>
                     <div><span class="text-slate-400">Has Complete Data:</span> <span class="font-mono text-slate-200">${valOrNa(info.has_complete_data)}</span></div>
                     <div><span class="text-slate-400">NFS File Name:</span> <span class="font-mono text-slate-200 break-all">${valOrNa(info.nfs_file_name)}</span></div>
-                    <div><span class="text-slate-400">Chain ID:</span> <span class="font-mono text-slate-300 text-[10px] break-all">${valOrNa(info.chain_id)}</span></div>
+                    <div><span class="text-slate-400">Chain ID:</span> <span class="font-mono text-slate-300 text-[10px] break-all">${escapeHtml(valOrNa(info.chain_id))}</span></div>
                     <div><span class="text-slate-400">Creation Time:</span> <span class="font-mono text-slate-200">${formatUsecsToLocalTime(info.creation_time_usecs || info.vdisk_creation_time_usecs)}</span></div>
                     ${(() => {
                         const origin = formatOriginatingClusterLabel(info);
@@ -4087,7 +4827,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 // === ADVANCED PROPERTIES DROPDOWN ===
                 const originAdv = formatOriginatingClusterLabel(info);
                 fieldsHtml += `
-                <details class="mt-3 group border border-slate-700 rounded-lg" ${isAdvancedPropertiesOpen ? 'open' : ''} ontoggle="isAdvancedPropertiesOpen = this.open">
+                <details id="inspector-advanced" class="mt-3 group border border-slate-700 rounded-lg" ${isAdvancedPropertiesOpen ? 'open' : ''} ontoggle="isAdvancedPropertiesOpen = this.open">
                     <summary class="px-3 py-2 text-xs font-semibold text-sky-400 cursor-pointer bg-slate-800/50 hover:bg-slate-700/50 transition flex items-center">
                         <svg class="w-3 h-3 mr-2 transform transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
                         Advanced Properties
@@ -4219,7 +4959,14 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 }
             }
 
+            const advancedAt = fieldsHtml.indexOf('<details id="inspector-advanced"');
+            if (advancedAt >= 0) {
+                fieldsHtml = `<div id="inspector-summary">${fieldsHtml.slice(0, advancedAt)}</div>${fieldsHtml.slice(advancedAt)}`;
+            } else {
+                fieldsHtml = `<div id="inspector-summary">${fieldsHtml}</div>`;
+            }
             inspector.innerHTML = fieldsHtml;
+            bindInspectorCopy();
         }
     </script>
 </body>
