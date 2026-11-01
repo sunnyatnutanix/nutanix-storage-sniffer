@@ -55,15 +55,22 @@ export class BatchRenderer {
         this.overlay = new Graphics();
         this.overlay.eventMode = "none";
 
-        this.root.addChild(this.fillLayer, this.labelLayer, this.overlay);
+        this.hoverOverlay = new Graphics();
+        this.hoverOverlay.eventMode = "none";
+
+        this.root.addChild(this.fillLayer, this.labelLayer, this.overlay, this.hoverOverlay);
         parent.addChild(this.root);
 
-        /** @type {{ sprite: Sprite, node: object, baseTint: number }[]} */
+        /** @type {{ sprite: Sprite, node: object, baseTint: number, baseAlpha: number }[]} */
         this.entries = [];
+        /** @type {WeakMap<object, number>} */
+        this._indexByNode = new WeakMap();
         /** @type {Text[]} */
         this.labels = [];
         /** @type {object|null} */
         this.hoverNode = null;
+        /** @type {((node: object) => SpriteVisual)|null} */
+        this._getVisualState = null;
 
         this._white = Texture.WHITE;
     }
@@ -85,6 +92,9 @@ export class BatchRenderer {
         this._clearFills();
         this._clearLabels();
         this.overlay.clear();
+        this.hoverOverlay.clear();
+        this.hoverNode = null;
+        this._getVisualState = getVisualState;
 
         const nodes = visibleNodes || [];
         let labelCount = 0;
@@ -97,16 +107,20 @@ export class BatchRenderer {
 
             const baseTint = getBaseTint(node) >>> 0;
             const visual = getVisualState(node) || {};
+            const tint = (visual.tint != null ? visual.tint : baseTint) >>> 0;
+            const alpha = visual.alpha != null ? visual.alpha : 1;
             const sprite = new Sprite(this._white);
             sprite.x = node.x0 || 0;
             sprite.y = node.y0 || 0;
             sprite.width = w;
             sprite.height = h;
-            sprite.tint = (visual.tint != null ? visual.tint : baseTint) >>> 0;
-            sprite.alpha = visual.alpha != null ? visual.alpha : 1;
+            sprite.tint = tint;
+            sprite.alpha = alpha;
             sprite.eventMode = "none";
             this.fillLayer.addChild(sprite);
-            this.entries.push({ sprite, node, baseTint });
+            const entryIndex = this.entries.length;
+            this.entries.push({ sprite, node, baseTint, baseAlpha: alpha });
+            this._indexByNode.set(node, entryIndex);
 
             if (labelCount < MAX_LABELS && w >= LABEL_MIN_WIDTH && h >= LABEL_MIN_HEIGHT) {
                 const spec = getLabel(node);
@@ -136,30 +150,72 @@ export class BatchRenderer {
      */
     updateChrome(opts = {}) {
         const getVisualState = opts.getVisualState || (() => ({ tint: 0x0369a1, alpha: 1 }));
+        this._getVisualState = getVisualState;
         if (opts.hoverNode !== undefined) this.hoverNode = opts.hoverNode;
 
         for (let i = 0; i < this.entries.length; i++) {
-            const { sprite, node, baseTint } = this.entries[i];
+            const entry = this.entries[i];
+            const { sprite, node, baseTint } = entry;
             const visual = getVisualState(node) || {};
-            sprite.tint = (visual.tint != null ? visual.tint : baseTint) >>> 0;
-            sprite.alpha = visual.alpha != null ? visual.alpha : 1;
+            const tint = (visual.tint != null ? visual.tint : baseTint) >>> 0;
+            const alpha = visual.alpha != null ? visual.alpha : 1;
+            entry.baseAlpha = alpha;
+            // Hover brighten applied after chrome base.
+            if (this.hoverNode && node === this.hoverNode) {
+                sprite.tint = brightenTint(tint, 0.22);
+                sprite.alpha = Math.min(1, alpha + 0.08);
+            } else {
+                sprite.tint = tint;
+                sprite.alpha = alpha;
+            }
         }
 
         this._paintOverlay(getVisualState);
+        this._paintHoverStroke();
     }
 
     /**
-     * Hover stroke only (fast path).
+     * Hover: tint only previous + next sprites; stroke on a dedicated overlay.
+     * Does not rebuild the scene or re-walk all selection chrome.
      * @param {object|null} node
      * @param {(node: object) => SpriteVisual} [getVisualState]
      */
     setHover(node, getVisualState) {
-        this.hoverNode = node || null;
-        if (typeof getVisualState === "function") {
-            this._paintOverlay(getVisualState);
-        } else {
-            this._paintHoverOnly();
+        if (typeof getVisualState === "function") this._getVisualState = getVisualState;
+        const resolve = this._getVisualState;
+
+        const prev = this.hoverNode;
+        const next = node || null;
+        if (prev === next) {
+            this._paintHoverStroke();
+            return;
         }
+
+        if (prev) {
+            const prevEntry = this._entryFor(prev);
+            if (prevEntry) {
+                const visual = typeof resolve === "function" ? resolve(prev) || {} : {};
+                const tint = (visual.tint != null ? visual.tint : prevEntry.baseTint) >>> 0;
+                const alpha = visual.alpha != null ? visual.alpha : prevEntry.baseAlpha;
+                prevEntry.sprite.tint = tint;
+                prevEntry.sprite.alpha = alpha;
+            }
+        }
+
+        this.hoverNode = next;
+
+        if (next) {
+            const nextEntry = this._entryFor(next);
+            if (nextEntry) {
+                const visual = typeof resolve === "function" ? resolve(next) || {} : {};
+                const tint = (visual.tint != null ? visual.tint : nextEntry.baseTint) >>> 0;
+                const alpha = visual.alpha != null ? visual.alpha : nextEntry.baseAlpha;
+                nextEntry.sprite.tint = brightenTint(tint, 0.22);
+                nextEntry.sprite.alpha = Math.min(1, alpha + 0.08);
+            }
+        }
+
+        this._paintHoverStroke();
     }
 
     /**
@@ -173,11 +229,25 @@ export class BatchRenderer {
         this._clearFills();
         this._clearLabels();
         this.overlay.clear();
+        this.hoverOverlay.clear();
         if (this.root.parent) this.root.parent.removeChild(this.root);
         this.root.destroy({ children: true });
         this.entries = [];
+        this._indexByNode = new WeakMap();
         this.labels = [];
         this.hoverNode = null;
+        this._getVisualState = null;
+    }
+
+    /**
+     * @param {object} node
+     * @returns {{ sprite: Sprite, node: object, baseTint: number, baseAlpha: number }|null}
+     */
+    _entryFor(node) {
+        if (!node) return null;
+        const idx = this._indexByNode.get(node);
+        if (idx == null) return null;
+        return this.entries[idx] || null;
     }
 
     _clearFills() {
@@ -187,6 +257,7 @@ export class BatchRenderer {
             sprite.destroy();
         }
         this.entries = [];
+        this._indexByNode = new WeakMap();
         this.fillLayer.removeChildren();
     }
 
@@ -247,16 +318,14 @@ export class BatchRenderer {
             g.rect((node.x0 || 0) + 0.5, (node.y0 || 0) + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
             g.stroke({ width, color, alpha: 1 });
         }
-
-        this._paintHoverOnly(false);
     }
 
     /**
-     * @param {boolean} [clearFirst]
+     * White hover stroke on a dedicated layer (does not clear selection strokes).
      */
-    _paintHoverOnly(clearFirst = true) {
-        const g = this.overlay;
-        if (clearFirst) g.clear();
+    _paintHoverStroke() {
+        const g = this.hoverOverlay;
+        g.clear();
         const node = this.hoverNode;
         if (!node) return;
         const w = Math.max(0, (node.x1 || 0) - (node.x0 || 0));
@@ -265,6 +334,23 @@ export class BatchRenderer {
         g.rect((node.x0 || 0) + 0.5, (node.y0 || 0) + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
         g.stroke({ width: 1.5, color: 0xffffff, alpha: 1 });
     }
+}
+
+/**
+ * Mix tint toward white for hover feedback without reallocating sprites.
+ * @param {number} tint 0xRRGGBB
+ * @param {number} amount 0..1
+ * @returns {number}
+ */
+export function brightenTint(tint, amount = 0.2) {
+    const a = Math.max(0, Math.min(1, amount));
+    const r = (tint >>> 16) & 0xff;
+    const g = (tint >>> 8) & 0xff;
+    const b = tint & 0xff;
+    const nr = Math.min(255, Math.round(r + (255 - r) * a));
+    const ng = Math.min(255, Math.round(g + (255 - g) * a));
+    const nb = Math.min(255, Math.round(b + (255 - b) * a));
+    return ((nr << 16) | (ng << 8) | nb) >>> 0;
 }
 
 export default BatchRenderer;
