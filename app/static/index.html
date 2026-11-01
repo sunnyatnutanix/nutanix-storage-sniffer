@@ -3250,6 +3250,25 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
         }
 
+        function expandAncestorsForNode(d3Node) {
+            if (!d3Node) return;
+            let curr = d3Node.parent;
+            while (curr) {
+                if (curr.treeRowId) {
+                    const parentRow = document.getElementById(curr.treeRowId);
+                    if (parentRow) {
+                        const parentWrapper = parentRow.parentElement;
+                        const childrenContainer = parentWrapper.querySelector(".tree-children");
+                        const caretBtn = parentRow.querySelector(".caret-btn");
+                        if (childrenContainer && caretBtn) {
+                            toggleTreeNodeExpand(parentWrapper, childrenContainer, caretBtn, true);
+                        }
+                    }
+                }
+                curr = curr.parent;
+            }
+        }
+
         function syncTreeHighlight(targetNode) {
             document.querySelectorAll(".tree-row").forEach(el => {
                 el.classList.remove("bg-sky-600/30", "border-sky-500", "text-sky-300", "font-bold", "bg-amber-500/20", "border-amber-400", "text-amber-300");
@@ -3272,26 +3291,12 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                         const row = document.getElementById(n.treeRowId);
                         if (row) {
                             row.classList.add("bg-amber-500/20", "border-amber-400", "text-amber-300");
-
-                            let curr = n.parent;
-                            while (curr) {
-                                if (curr.treeRowId) {
-                                    const parentRow = document.getElementById(curr.treeRowId);
-                                    if (parentRow) {
-                                        const parentWrapper = parentRow.parentElement;
-                                        const childrenContainer = parentWrapper.querySelector(".tree-children");
-                                        const caretBtn = parentRow.querySelector(".caret-btn");
-                                        if (childrenContainer && caretBtn) {
-                                            toggleTreeNodeExpand(parentWrapper, childrenContainer, caretBtn, true);
-                                        }
-                                    }
-                                }
-                                curr = curr.parent;
-                            }
                         }
                     }
                 });
             }
+
+            expandAncestorsForNode(targetNode);
 
             if (targetNode && targetNode.treeRowId) {
                 const activeRow = document.getElementById(targetNode.treeRowId);
