@@ -1,4 +1,5 @@
 import logging
+import mimetypes
 import os
 import traceback
 import json
@@ -10,6 +11,11 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
+
+# Ensure ES modules / workers are served with a JS MIME type (some hosts default .mjs oddly).
+mimetypes.add_type("application/javascript", ".mjs")
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("text/javascript", ".mjs")
 
 from app.cvm_collector import CVMCollector
 from app.parser import (
