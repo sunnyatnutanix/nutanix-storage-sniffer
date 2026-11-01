@@ -11,10 +11,16 @@
         import * as TreemapColorStyle from "/static/js/treemap/color-style.js";
         import * as TreemapPixi from "/static/js/treemap/pixi-viewport.js";
         import * as TreemapBatch from "/static/js/treemap/batch-renderer.js";
+        import * as TreemapSpatialHash from "/static/js/treemap/spatial-hash.js";
+        import * as TreemapHitTest from "/static/js/treemap/hit-test.js";
+        import * as TreemapTooltip from "/static/js/treemap/tooltip-bridge.js";
         window.TreemapBridge = TreemapBridge;
         window.TreemapColorStyle = TreemapColorStyle;
         window.TreemapPixi = TreemapPixi;
         window.TreemapBatch = TreemapBatch;
+        window.TreemapSpatialHash = TreemapSpatialHash;
+        window.TreemapHitTest = TreemapHitTest;
+        window.TreemapTooltip = TreemapTooltip;
         window.__treemapPerf = window.__treemapPerf || {
             layoutMs: 0,
             workerMs: 0,
@@ -567,6 +573,8 @@
         /** @type {object|null} latest packed SoA for worker renderer (nodeRefs → d3 nodes) */
         let treemapPackedLayout = null;
         let treemapRenderGeneration = 0;
+        /** @type {import('/static/js/treemap/spatial-hash.js').SpatialHash|null} */
+        let treemapSpatialHash = null;
         /** Last hierarchy root used for Pixi geometry (chrome-only updates when unchanged). */
         let treemapPixiRootKey = null;
         /** @type {object|null} */
@@ -3512,20 +3520,62 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         function refreshTreemapHoverChrome() {
             if (isPixiTreemapEnabled() && treemapPixiViewport && treemapPixiViewport.ready) {
+                // Phase 3: tint only previous/next sprite (no full scene rebuild).
                 treemapPixiViewport.setHover(lastHoveredNode, getPixiVisualState);
                 return;
             }
             drawCanvasState();
         }
 
-        function onCanvasMouseMove(event) {
-            const canvas = document.getElementById("treemap-canvas");
-            if (!canvas) return;
+        function shouldUseSpatialHitTest() {
+            const mode = getTreemapRendererMode();
+            return (mode === "worker" || mode === "pixi") && !!(window.TreemapHitTest);
+        }
+
+        function rebuildTreemapSpatialHash(nodes, width, height) {
+            if (!window.TreemapSpatialHash) {
+                treemapSpatialHash = null;
+                return null;
+            }
+            if (!treemapSpatialHash) {
+                treemapSpatialHash = window.TreemapSpatialHash.getSpatialHash
+                    ? window.TreemapSpatialHash.getSpatialHash()
+                    : new window.TreemapSpatialHash.SpatialHash();
+            }
+            const w = width != null ? width : (document.getElementById("canvas-wrapper") || {}).clientWidth || 1;
+            const h = height != null ? height : (document.getElementById("canvas-wrapper") || {}).clientHeight || 1;
+            treemapSpatialHash.rebuild(nodes || currentDrawnNodes || [], w, h);
+            return treemapSpatialHash;
+        }
+
+        function hitTestDrawnNode(event, canvas) {
+            if (shouldUseSpatialHitTest() && window.TreemapHitTest) {
+                const result = window.TreemapHitTest.hitTestEvent(
+                    event,
+                    canvas,
+                    treemapSpatialHash,
+                    currentDrawnNodes,
+                    { fallbackLinear: true }
+                );
+                if (window.TreemapBridge && window.TreemapBridge.recordTreemapPerf) {
+                    window.TreemapBridge.recordTreemapPerf({
+                        hitTestMs: result.hitTestMs,
+                        hitTestMethod: result.method,
+                    });
+                } else {
+                    window.__treemapPerf = {
+                        ...(window.__treemapPerf || {}),
+                        hitTestMs: result.hitTestMs,
+                        hitTestMethod: result.method,
+                        updatedAt: Date.now(),
+                    };
+                }
+                return result.node;
+            }
             const rect = canvas.getBoundingClientRect();
-            
             const x = event.clientX - rect.left;
             const y = event.clientY - rect.top;
-            
+            const t0 = performance.now();
             let found = null;
             for (let i = currentDrawnNodes.length - 1; i >= 0; i--) {
                 const n = currentDrawnNodes[i];
@@ -3534,6 +3584,36 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     break;
                 }
             }
+            window.__treemapPerf = {
+                ...(window.__treemapPerf || {}),
+                hitTestMs: performance.now() - t0,
+                hitTestMethod: "linear",
+                updatedAt: Date.now(),
+            };
+            return found;
+        }
+
+        function isTooltipHoverTarget(found) {
+            if (!found || !found.data) return false;
+            const d = found.data;
+            return !!(
+                d.vdisk_id ||
+                d.is_other_aggregate ||
+                found.__syntheticOther ||
+                d.is_shared_clone_block ||
+                d.is_shared_parent_vdisk ||
+                d.is_chain_snap_share_block ||
+                d.is_partial_extents_block ||
+                d.is_total_garbage_block ||
+                d.is_explicit_reserve_block
+            );
+        }
+
+        function onCanvasMouseMove(event) {
+            const canvas = document.getElementById("treemap-canvas");
+            if (!canvas) return;
+
+            const found = hitTestDrawnNode(event, canvas);
 
             if (found) {
                 if ((found.children && found.depth > 0) || found.__syntheticOther || (found.data && found.data.is_other_aggregate)) {
@@ -3541,7 +3621,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 } else canvas.style.cursor = "pointer";
             } else canvas.style.cursor = "default";
 
-            if (found && (found.data.vdisk_id || found.data.is_other_aggregate || found.__syntheticOther || found.data.is_shared_clone_block || found.data.is_shared_parent_vdisk || found.data.is_chain_snap_share_block || found.data.is_partial_extents_block || found.data.is_total_garbage_block || found.data.is_explicit_reserve_block)) {
+            if (isTooltipHoverTarget(found)) {
                 if (found !== lastHoveredNode) {
                     lastHoveredNode = found;
                     refreshTreemapHoverChrome();
@@ -3567,18 +3647,8 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         function onCanvasClick(event) {
             const canvas = document.getElementById("treemap-canvas");
             if (!canvas) return;
-            const rect = canvas.getBoundingClientRect();
-            const x = event.clientX - rect.left;
-            const y = event.clientY - rect.top;
-            
-            let found = null;
-            for (let i = currentDrawnNodes.length - 1; i >= 0; i--) {
-                const n = currentDrawnNodes[i];
-                if (x >= n.x0 && x <= n.x1 && y >= n.y0 && y <= n.y1) {
-                    found = n;
-                    break;
-                }
-            }
+
+            const found = hitTestDrawnNode(event, canvas);
 
             if (found) {
                 hideFloatingTooltip();
@@ -3933,6 +4003,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (!useWorker) {
                 treemapPackedLayout = null;
                 treemapPixiRootKey = null;
+                treemapSpatialHash = null;
                 currentDrawnNodes = allDescendants;
                 const tDraw0 = performance.now();
                 drawCanvasState();
@@ -3956,6 +4027,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (mode === "worker") {
                 // Interim: show unpruned frame so zoom stays responsive, then replace with pruned.
                 currentDrawnNodes = allDescendants;
+                rebuildTreemapSpatialHash(currentDrawnNodes, width, height);
                 drawCanvasState();
             }
 
@@ -3967,6 +4039,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 if (gen !== treemapRenderGeneration) return;
                 treemapPackedLayout = result.packed;
                 currentDrawnNodes = result.applied.visibleNodes;
+                rebuildTreemapSpatialHash(currentDrawnNodes, width, height);
 
                 if (mode === "pixi") {
                     try {
@@ -3983,6 +4056,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                             prunedCount: result.pruneResult ? result.pruneResult.prunedCount : 0,
                             inputCount: result.pruneResult ? result.pruneResult.inputCount : allDescendants.length,
                             renderer: "pixi",
+                            spatialCells: treemapSpatialHash ? treemapSpatialHash.cols * treemapSpatialHash.rows : 0,
                         });
                     } catch (err) {
                         console.warn("[treemap] pixi paint failed; falling back to worker canvas", err);
@@ -4016,11 +4090,13 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     prunedCount: result.pruneResult ? result.pruneResult.prunedCount : 0,
                     inputCount: result.pruneResult ? result.pruneResult.inputCount : allDescendants.length,
                     renderer: "worker",
+                    spatialCells: treemapSpatialHash ? treemapSpatialHash.cols * treemapSpatialHash.rows : 0,
                 });
             }).catch((err) => {
                 console.warn("[treemap] worker prune failed; keeping classic draw", err);
                 if (gen !== treemapRenderGeneration) return;
                 currentDrawnNodes = allDescendants;
+                rebuildTreemapSpatialHash(currentDrawnNodes, width, height);
                 if (mode === "pixi") {
                     ensureTreemapCanvas();
                 }
@@ -4240,140 +4316,37 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
         }
 
+        function getTooltipBridgeDeps() {
+            return {
+                formatBytes,
+                getDisplayNodeName,
+                formatUsecsToLocalTime,
+                applyTooltipTextStyle,
+                getRealNodeSum,
+                getLogicalNodeSum,
+                getVdiskSizeSum,
+            };
+        }
+
         function showFloatingTooltip(event, d) {
-            const tooltip = document.getElementById("floating-tooltip");
-            const realSum = getRealNodeSum(d);
-            const logicalSum = getLogicalNodeSum(d);
-            const vdiskSizeSum = getVdiskSizeSum(d);
-            const info = d.data;
-            const creationTime = formatUsecsToLocalTime(info.vdisk_creation_time_usecs);
-            const isVmGroup = info.name && String(info.name).startsWith("VM:");
-            const isVgGroup = info.name && String(info.name).startsWith("VG:");
-
-            let html = `<div class="font-bold text-sky-400 border-b border-slate-700 pb-1 mb-1 break-all">${getDisplayNodeName(info)}</div>`;
-
-            if (info.is_other_aggregate || d.__syntheticOther) {
-                html += `
-                    <div><span class="text-slate-400">Aggregated:</span> <span class="text-amber-300 font-bold">${info.other_count || 0} small items</span></div>
-                    <div><span class="text-slate-400">Combined size:</span> <span class="text-emerald-300 font-bold">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
-                    <div class="text-[0.85em] text-slate-500 mt-1">Click to zoom into parent folder</div>
-                `;
-                tooltip.innerHTML = html;
-                applyTooltipTextStyle();
-                tooltip.classList.remove("hidden");
-                moveFloatingTooltip(event);
+            if (window.TreemapTooltip && typeof window.TreemapTooltip.showFloatingTooltip === "function") {
+                window.TreemapTooltip.showFloatingTooltip(event, d, getTooltipBridgeDeps());
                 return;
             }
-
-            if (info.is_partial_extents_block) {
-                html += `
-                    <div><span class="text-slate-400">Container:</span> <span class="font-mono text-slate-200">${info.container_name || "n/a"}</span></div>
-                    <div><span class="text-slate-400">Partial Extents:</span> <span class="text-amber-300 font-bold">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
-                    <div class="text-[0.85em] text-slate-500 mt-1">Source: curator_cli display_garbage_report</div>
-                `;
-            } else if (info.is_total_garbage_block) {
-                html += `
-                    <div><span class="text-slate-400">Container:</span> <span class="font-mono text-slate-200">${info.container_name || "n/a"}</span></div>
-                    <div><span class="text-slate-400">Total Garbage w/o PEG:</span> <span class="text-amber-300 font-bold">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
-                    <div class="text-[0.85em] text-slate-500 mt-1">Source: curator_cli display_garbage_report</div>
-                `;
-            } else if (info.is_chain_snap_share_block) {
-                const terms = info.snap_share_formula_terms || {};
-                html += `
-                    <div><span class="text-slate-400">Chain ID:</span> <span class="font-mono text-slate-200 text-[0.85em] break-all">${info.chain_id || info.name || "n/a"}</span></div>
-                    <div><span class="text-slate-400">Chain Snap Share:</span> <span class="text-amber-300 font-bold">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
-                    <div class="mt-1 pt-1 border-t border-slate-700/50 space-y-0.5">
-                        <div><span class="text-slate-400">Logical Live:</span> <span class="text-sky-300 font-bold">${formatBytes(terms.logical_live || 0)}</span></div>
-                        <div><span class="text-slate-400">Logical Shared Clone:</span> <span class="text-emerald-300 font-bold">${formatBytes(terms.logical_shared_clone || 0)}</span></div>
-                        <div><span class="text-slate-400">Logical Exclusive:</span> <span class="text-slate-200 font-bold">${formatBytes(terms.logical_exclusive || 0)}</span></div>
-                        <div><span class="text-slate-400">VDisk Exclusive Sum:</span> <span class="text-slate-200 font-bold">${formatBytes(terms.exclusive_sum || 0)}</span></div>
-                    </div>
-                    <div class="mt-1 pt-1 border-t border-slate-700/50"><span class="text-slate-400">VDisks in Chain:</span> <span class="font-mono text-slate-200 font-bold">${info.vdisk_ids ? info.vdisk_ids.length : 0}</span></div>
-                `;
-            } else if (info.is_shared_clone_block) {
-                html += `
-                    <div><span class="text-slate-400">Root Chain ID:</span> <span class="font-mono text-slate-200 text-[0.85em] break-all">${info.chain_id || "n/a"}</span></div>
-                    <div><span class="text-slate-400">Total Phys Overhead:</span> <span class="text-amber-300 font-bold">${info.formatted_size}</span></div>
-                    <div class="mt-1 pt-1 border-t border-slate-700/50 space-y-0.5">
-                        <div><span class="text-slate-400 text-[0.85em]">Total Phys PEG:</span> <span class="text-emerald-300 font-bold text-[0.85em]">${info.formatted_total_peg || info.formatted_max_peg || "0 KiB"}</span></div>
-                        <div><span class="text-slate-400 text-[0.85em]">Max Log Clone:</span> <span class="text-sky-300 font-bold text-[0.85em]">${info.formatted_logical_clone} <span class="text-slate-500 font-normal">(Est Phys: ${info.formatted_physical_clone || formatBytes(info.logical_clone_bytes ? info.logical_clone_bytes * 2 : 0)})</span></span></div>
-                    </div>
-                    <div class="mt-1 pt-1 border-t border-slate-700/50"><span class="text-slate-400">Member Chains:</span> <span class="font-mono text-slate-200 font-bold">${info.member_chain_ids ? info.member_chain_ids.length : 0}</span></div>
-                    <div><span class="text-slate-400">VDisks in Family:</span> <span class="font-mono text-slate-200 font-bold">${info.vdisk_ids ? info.vdisk_ids.length : 0}</span></div>
-                `;
-            } else if (isVmGroup || isVgGroup) {
-                const leafRows = [];
-                const gatherRows = (node) => {
-                    if (!node) return;
-                    const nd = node.data || {};
-                    if (nd.vdisk_id !== undefined && nd.vdisk_id !== null) {
-                        leafRows.push({
-                            id: String(nd.vdisk_id),
-                            provisionBytes: Number(nd.vdisk_size || 0),
-                        });
-                    }
-                    if (node.children && node.children.length) {
-                        node.children.forEach(gatherRows);
-                    }
-                };
-                gatherRows(d);
-                if (!leafRows.length && d.leaves && typeof d.leaves === "function") {
-                    d.leaves().forEach(leaf => {
-                        const ld = leaf.data || {};
-                        if (ld.vdisk_id === undefined || ld.vdisk_id === null) return;
-                        leafRows.push({
-                            id: String(ld.vdisk_id),
-                            provisionBytes: Number(ld.vdisk_size || 0),
-                        });
-                    });
-                }
-                leafRows.sort((a, b) => b.provisionBytes - a.provisionBytes);
-                const totalProvisionBytes = leafRows.reduce((acc, row) => acc + row.provisionBytes, 0);
-                html += `
-                    <div><span class="text-slate-400">Group Type:</span> <span class="text-slate-200 font-bold">${isVmGroup ? "Virtual Machine" : "Volume Group"}</span></div>
-                    <div><span class="text-slate-400">Member VDisks:</span> <span class="text-emerald-300 font-bold">${leafRows.length}</span></div>
-                    <div><span class="text-slate-400">Total Provisioned:</span> <span class="text-emerald-300 font-bold">${formatBytes(totalProvisionBytes)}</span></div>
-                    <div class="mt-1 pt-1 border-t border-slate-700/50 text-[0.85em] text-slate-300 max-h-48 overflow-y-auto pr-1">
-                        ${leafRows.length ? leafRows.map((row, idx) => `
-                            <div class="flex justify-between items-center py-0.5">
-                                <span>${idx + 1}. ${row.id}</span>
-                                <span class="text-amber-300 font-mono">${formatBytes(row.provisionBytes)}</span>
-                            </div>
-                        `).join("") : `<div class="text-slate-500 italic">No member VDisks</div>`}
-                    </div>
-                `;
-            } else {
-                html += `<div><span class="text-slate-400">Exclusive Usage:</span> <span class="${info.is_to_remove ? 'text-rose-400 font-bold' : 'text-amber-300 font-bold'}">${formatBytes(realSum)}</span></div>`;
-                if (logicalSum > 0 || info.logical_bytes !== undefined) html += `<div><span class="text-slate-400">Logical Exclusive:</span> <span class="text-sky-300 font-bold">${formatBytes(logicalSum)}</span></div>`;
-                if (vdiskSizeSum > 0 || info.vdisk_size !== undefined) html += `<div><span class="text-slate-400">Provisioned Size:</span> <span class="text-emerald-300 font-bold">${formatBytes(vdiskSizeSum)}</span></div>`;
-            }
-
-            if (info.vdisk_id || (!info.children && !info.is_shared_clone_block && !info.is_chain_snap_share_block && !info.is_partial_extents_block && !info.is_total_garbage_block)) {
-                html += `
-                    <div class="text-[0.85em] text-slate-300 space-y-0.5 mt-1 border-t border-slate-800 pt-1">
-                        <div><span class="text-slate-400">VDisk ID:</span> ${info.vdisk_id || "n/a"}</div>
-                        <div><span class="text-slate-400">Chain ID:</span> ${info.chain_id || "n/a"}</div>
-                        <div><span class="text-slate-400">Parent VDisk ID:</span> ${info.parent_vdisk_id || "n/a"}</div>
-                        <div><span class="text-slate-400">VDisk Name:</span> ${info.vdisk_name || "n/a"}</div>
-                        ${(info.inherited_usage_bytes !== undefined && info.inherited_usage_bytes !== null) ? `<div><span class="text-slate-400">Shared Storage:</span> ${formatBytes(Number(info.inherited_usage_bytes) || 0)}</div>` : ""}
-                        <div><span class="text-slate-400">Creation Time:</span> ${creationTime}</div>
-                    </div>
-                `;
-
-                if (info.chain_info && Array.isArray(info.chain_info) && info.chain_info.length > 0) {
-                    html += `<div class="text-[0.85em] text-amber-300 font-semibold mt-1 border-t border-slate-800 pt-0.5">Exists in ${info.chain_info.length} Snapshot Trees</div>`;
-                }
-            }
-
-            if (info.is_to_remove) html += `<div class="text-[0.85em] text-rose-300 font-semibold mt-0.5">Status: Pending Curator Deletion</div>`;
-
-            tooltip.innerHTML = html;
+            // Classic fallback if module not loaded yet.
+            const tooltip = document.getElementById("floating-tooltip");
+            if (!tooltip || !d || !d.data) return;
+            tooltip.innerHTML = `<div class="font-bold text-sky-400">${getDisplayNodeName(d.data)}</div>`;
             applyTooltipTextStyle();
             tooltip.classList.remove("hidden");
             moveFloatingTooltip(event);
         }
 
         function moveFloatingTooltip(event) {
+            if (window.TreemapTooltip && typeof window.TreemapTooltip.moveFloatingTooltip === "function") {
+                window.TreemapTooltip.moveFloatingTooltip(event, getTooltipBridgeDeps());
+                return;
+            }
             const tooltip = document.getElementById("floating-tooltip");
             const xOffset = 15, yOffset = 15;
             let posX = event.clientX + xOffset;
@@ -4384,7 +4357,13 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             tooltip.style.top = `${posY}px`;
         }
 
-        function hideFloatingTooltip() { document.getElementById("floating-tooltip").classList.add("hidden"); }
+        function hideFloatingTooltip() {
+            if (window.TreemapTooltip && typeof window.TreemapTooltip.hideFloatingTooltip === "function") {
+                window.TreemapTooltip.hideFloatingTooltip(getTooltipBridgeDeps());
+                return;
+            }
+            document.getElementById("floating-tooltip").classList.add("hidden");
+        }
 
         function findNodeByName(searchRoot, name) {
             if (!searchRoot) return null;
