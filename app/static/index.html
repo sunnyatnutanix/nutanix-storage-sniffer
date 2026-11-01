@@ -9,8 +9,12 @@
     <script type="module">
         import * as TreemapBridge from "/static/js/treemap/layout-bridge.js";
         import * as TreemapColorStyle from "/static/js/treemap/color-style.js";
+        import * as TreemapPixi from "/static/js/treemap/pixi-viewport.js";
+        import * as TreemapBatch from "/static/js/treemap/batch-renderer.js";
         window.TreemapBridge = TreemapBridge;
         window.TreemapColorStyle = TreemapColorStyle;
+        window.TreemapPixi = TreemapPixi;
+        window.TreemapBatch = TreemapBatch;
         window.__treemapPerf = window.__treemapPerf || {
             layoutMs: 0,
             workerMs: 0,
@@ -563,6 +567,10 @@
         /** @type {object|null} latest packed SoA for worker renderer (nodeRefs → d3 nodes) */
         let treemapPackedLayout = null;
         let treemapRenderGeneration = 0;
+        /** Last hierarchy root used for Pixi geometry (chrome-only updates when unchanged). */
+        let treemapPixiRootKey = null;
+        /** @type {object|null} */
+        let treemapPixiViewport = null;
         let loadedOfflineFileName = "";
         let loadedOfflineRawText = "";
         let loadedOfflineSections = [];
@@ -1030,13 +1038,16 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (headerBar) themeTextStyle.headerBar = !!headerBar.checked;
             if (scale) themeTextStyle.scale = Number(scale.value) || 110;
             saveThemeTextStyle();
-            drawCanvasState();
+            // Label metrics change → full redraw (Pixi rebuilds sparse labels).
+            if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+            else drawCanvasState();
         }
 
         function resetDefaultTextStyle() {
             themeTextStyle = { ...defaultTextStyle };
             saveThemeTextStyle();
-            drawCanvasState();
+            if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+            else drawCanvasState();
         }
 
         function applyTooltipTextStyle() {
@@ -1100,17 +1111,25 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
         }
 
+        function redrawTreemapChromeOrFull() {
+            if (isPixiTreemapEnabled() && treemapPixiViewport && treemapPixiViewport.ready && currentDrawnNodes.length) {
+                refreshPixiChromeOnly();
+                return;
+            }
+            drawCanvasState();
+        }
+
         function toggleLegendFilter(key) {
             if (activeLegendFilter === key) activeLegendFilter = null; 
             else activeLegendFilter = key; 
             updateLegendUI();
-            drawCanvasState(); 
+            redrawTreemapChromeOrFull();
         }
 
         function setLegendFilterFromDropdown(value) {
             activeLegendFilter = value ? value : null;
             updateLegendUI();
-            drawCanvasState();
+            redrawTreemapChromeOrFull();
         }
 
         function toggleLegendFilterMenu(event) {
@@ -1403,7 +1422,11 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                         activeChainVDiskIds.clear();
                         activeMemberChainIds.clear();
                         if (currentHierarchyNode) {
-                            renderSpaceSnifferView(currentHierarchyNode);
+                            if (isPixiTreemapEnabled()) {
+                                renderSpaceSnifferView(currentHierarchyNode, { chromeOnly: true });
+                            } else {
+                                renderSpaceSnifferView(currentHierarchyNode);
+                            }
                             syncTreeHighlight(currentHierarchyNode);
                         }
                     }
@@ -3487,6 +3510,14 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             return 0;
         }
 
+        function refreshTreemapHoverChrome() {
+            if (isPixiTreemapEnabled() && treemapPixiViewport && treemapPixiViewport.ready) {
+                treemapPixiViewport.setHover(lastHoveredNode, getPixiVisualState);
+                return;
+            }
+            drawCanvasState();
+        }
+
         function onCanvasMouseMove(event) {
             const canvas = document.getElementById("treemap-canvas");
             if (!canvas) return;
@@ -3513,13 +3544,13 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (found && (found.data.vdisk_id || found.data.is_other_aggregate || found.__syntheticOther || found.data.is_shared_clone_block || found.data.is_shared_parent_vdisk || found.data.is_chain_snap_share_block || found.data.is_partial_extents_block || found.data.is_total_garbage_block || found.data.is_explicit_reserve_block)) {
                 if (found !== lastHoveredNode) {
                     lastHoveredNode = found;
-                    drawCanvasState(); 
+                    refreshTreemapHoverChrome();
                     showFloatingTooltip(event, found);
                 } else moveFloatingTooltip(event);
             } else {
                 if (lastHoveredNode !== null) {
                     lastHoveredNode = null;
-                    drawCanvasState();
+                    refreshTreemapHoverChrome();
                     hideFloatingTooltip();
                 }
             }
@@ -3528,7 +3559,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         function onCanvasMouseOut() {
             if (lastHoveredNode !== null) {
                 lastHoveredNode = null;
-                drawCanvasState();
+                refreshTreemapHoverChrome();
                 hideFloatingTooltip();
             }
         }
@@ -3572,24 +3603,49 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
         }
 
-        function isWorkerTreemapEnabled() {
-            if (window.TreemapBridge && typeof window.TreemapBridge.isWorkerRendererEnabled === "function") {
-                return window.TreemapBridge.isWorkerRendererEnabled();
+        function getTreemapRendererMode() {
+            if (window.TreemapBridge && typeof window.TreemapBridge.getTreemapRendererMode === "function") {
+                return window.TreemapBridge.getTreemapRendererMode();
             }
             try {
                 const params = new URLSearchParams(window.location.search);
                 const q = (params.get("renderer") || "").toLowerCase();
-                if (q === "worker") return true;
-                if (q === "classic" || q === "canvas") return false;
-                return localStorage.getItem("treemap_renderer") === "worker";
-            } catch (_) {
-                return false;
+                if (q === "pixi" || q === "webgl") return "pixi";
+                if (q === "worker") return "worker";
+                if (q === "classic" || q === "canvas" || q === "2d") return "classic";
+                const stored = (localStorage.getItem("treemap_renderer") || "").toLowerCase();
+                if (stored === "pixi" || stored === "webgl") return "pixi";
+                if (stored === "worker") return "worker";
+            } catch (_) { /* ignore */ }
+            return "classic";
+        }
+
+        function isWorkerTreemapEnabled() {
+            const mode = getTreemapRendererMode();
+            return mode === "worker" || mode === "pixi";
+        }
+
+        function isPixiTreemapEnabled() {
+            if (window.TreemapBridge && typeof window.TreemapBridge.isPixiRendererEnabled === "function") {
+                return window.TreemapBridge.isPixiRendererEnabled();
             }
+            return getTreemapRendererMode() === "pixi";
         }
 
         function ensureTreemapCanvas() {
+            // Pixi owns #treemap-canvas when active; do not clobber it with a 2D canvas.
+            if (isPixiTreemapEnabled() && treemapPixiViewport && treemapPixiViewport.ready) {
+                return treemapPixiViewport.canvas || document.getElementById("treemap-canvas");
+            }
             const container = document.getElementById("treemap");
             let canvas = document.getElementById("treemap-canvas");
+            if (canvas && treemapPixiViewport && treemapPixiViewport.canvas === canvas) {
+                // Switching away from Pixi mid-session.
+                try { treemapPixiViewport.destroy(); } catch (_) { /* ignore */ }
+                treemapPixiViewport = null;
+                treemapPixiRootKey = null;
+                canvas = null;
+            }
             if (!canvas) {
                 container.innerHTML = "";
                 canvas = document.createElement("canvas");
@@ -3603,6 +3659,198 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 container.appendChild(canvas);
             }
             return canvas;
+        }
+
+        function makeTreemapRootKey(node, width, height) {
+            const data = node && node.data ? node.data : null;
+            const name = data && data.name != null ? String(data.name) : "";
+            const vid = data && data.vdisk_id != null ? String(data.vdisk_id) : "";
+            const search = String(activeSearchQuery || "");
+            const timeKey = activeTimeFilter ? JSON.stringify(activeTimeFilter) : "";
+            return `${name}|${vid}|${width}x${height}|${search}|${timeKey}`;
+        }
+
+        function isNodePrimarySelected(d) {
+            if (!selectedNodeSignature || !d || !d.data) return false;
+            const sig = selectedNodeSignature;
+            if (sig.type === "vdisk") return d.data.vdisk_id !== undefined && d.data.vdisk_id !== null && String(d.data.vdisk_id) === sig.id;
+            if (sig.type === "shared_block") return !!d.data.is_shared_clone_block && String(d.data.chain_id || "") === sig.chainId;
+            if (sig.type === "chain_snap_share") return !!d.data.is_chain_snap_share_block && String(d.data.chain_id || "") === sig.chainId;
+            if (sig.type === "shared_parent") {
+                if (sig.lineageId) return !!d.data.is_shared_parent_vdisk && resolveNodeLineageId(d.data) === sig.lineageId;
+                return !!d.data.is_shared_parent_vdisk && String(d.data.chain_id || "") === sig.chainId;
+            }
+            if (sig.type === "group") return !d.data.vdisk_id && !d.data.is_shared_clone_block && !d.data.is_shared_parent_vdisk && !d.data.is_chain_snap_share_block && String(d.data.name || "") === sig.name;
+            if (sig.type === "chain_hierarchy") return !!d.data.is_chain_hierarchy_node && String(d.data.chain_id || "") === sig.chainId;
+            return false;
+        }
+
+        function getNodeHighlightFlags(d) {
+            const isExactChainLeaf = isActiveLineageHighlight(d.data) && !!d.data.vdisk_id;
+            const isExactChainBlockRoot = d.data.is_shared_clone_block && activeChainId && String(d.data.chain_id) === String(activeChainId);
+            const isExactChainBlockMember = d.data.is_shared_clone_block && d.data.member_chain_ids && activeChainId && d.data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
+            const isExactChainBlockActiveMember = d.data.is_shared_clone_block && d.data.chain_id && activeMemberChainIds.has(String(d.data.chain_id));
+            const isExactSnapShareBlock = d.data.is_chain_snap_share_block && activeChainId && String(d.data.chain_id) === String(activeChainId);
+            const isExactSharedParentBlock = d.data.is_shared_parent_vdisk && isActiveLineageHighlight(d.data);
+            const isHighlight = isExactChainLeaf || isExactChainBlockRoot || isExactChainBlockMember || isExactChainBlockActiveMember || isExactSnapShareBlock || isExactSharedParentBlock;
+            const containsChainVDisk = !isHighlight && nodeContainsChainVDisk(d);
+            return { isHighlight, containsChainVDisk, isExactChainLeaf };
+        }
+
+        function getPixiVisualState(node) {
+            const d = node;
+            const baseTint = (window.TreemapColorStyle && window.TreemapColorStyle.cssColorToUint)
+                ? window.TreemapColorStyle.cssColorToUint(getEntityColor(d.data))
+                : 0x0369a1;
+            const { isHighlight, containsChainVDisk } = getNodeHighlightFlags(d);
+            const isPrimarySelected = isNodePrimarySelected(d);
+            const isLegendFilteredOut = activeLegendFilter && !nodeOrAncestorMatchesCategory(d, activeLegendFilter);
+            const isSearchFilteredOut = hasActiveSearch() && !d.isEffectiveSearchMatch;
+            const isFilteredOut = isLegendFilteredOut || isSearchFilteredOut;
+
+            let alpha = 1;
+            if (isFilteredOut) alpha = 0.45;
+            else if (isPrimarySelected) alpha = 1;
+            else if (isHighlight) alpha = 0.88;
+            else if (containsChainVDisk) alpha = 0.72;
+
+            let stroke = "none";
+            let strokeColor = 0xffffff;
+            let strokeWidth = 1.5;
+            if (isPrimarySelected) {
+                stroke = "selected";
+                strokeColor = 0x22d3ee;
+                strokeWidth = 2;
+            } else if (isHighlight) {
+                stroke = "highlight";
+                strokeColor = 0xfbbf24;
+                strokeWidth = 1.5;
+            } else if (activeLegendFilter || hasActiveSearch()) {
+                let shouldHighlight = false;
+                if (activeLegendFilter && hasActiveSearch()) {
+                    shouldHighlight = nodeOrAncestorMatchesCategory(d, activeLegendFilter) && (d.isSearchMatch || d.isAncestorSearchMatch);
+                } else if (activeLegendFilter) {
+                    shouldHighlight = nodeOrAncestorMatchesCategory(d, activeLegendFilter);
+                } else if (hasActiveSearch()) {
+                    shouldHighlight = (d.isSearchMatch || d.isAncestorSearchMatch);
+                }
+                if (shouldHighlight) {
+                    stroke = "filter";
+                    strokeColor = 0xffffff;
+                    strokeWidth = 1.5;
+                }
+            }
+
+            return { tint: baseTint, alpha, stroke, strokeColor, strokeWidth };
+        }
+
+        function getPixiLabelSpec(node) {
+            const d = node;
+            const w = Math.max(0, d.x1 - d.x0);
+            const h = Math.max(0, d.y1 - d.y0);
+            const layout = getTreemapLayoutMetrics();
+            const textScale = layout.textScale;
+            const labelFill = themeTextStyle.fill || "#ffffff";
+            const { isHighlight, containsChainVDisk } = getNodeHighlightFlags(d);
+
+            // Sparse labels only: skip tiny tiles; prefer folders / aggregates.
+            if (d.data && (d.data.is_other_aggregate || d.__syntheticOther)) {
+                if (w < 56 || h < 18) return null;
+                return {
+                    text: d.data.name || "Other small files",
+                    x: d.x0 + 4,
+                    y: d.y0 + 4,
+                    fontSize: Math.round(10 * textScale),
+                    fill: labelFill,
+                    bold: true,
+                };
+            }
+            if (d.children && d.children.length) {
+                if (w < 70 || h < 22) return null;
+                let label = d.data.name || "";
+                if (containsChainVDisk) label = "🔗 " + label;
+                const sizeBit = formatBytes(getRealNodeSum(d));
+                return {
+                    text: `${label} (${sizeBit})`,
+                    x: d.x0 + 4,
+                    y: d.y0 + Math.round(layout.titleBarHeight * 0.2),
+                    fontSize: Math.round(11 * textScale),
+                    fill: isHighlight ? "#fbbf24" : labelFill,
+                    bold: true,
+                };
+            }
+            // Leaf usage: only large tiles.
+            if (w >= 90 && h >= 36) {
+                return {
+                    text: formatBytes(getRealNodeSum(d)),
+                    x: d.x0 + w / 2,
+                    y: d.y0 + h / 2,
+                    fontSize: Math.min(Math.round(11 * textScale), Math.floor(h * 0.28)),
+                    fill: d.data.is_free ? "#86efac" : d.data.is_to_remove ? "#fda4af" : labelFill,
+                    fontFamily: "monospace",
+                    bold: true,
+                    align: "center",
+                };
+            }
+            return null;
+        }
+
+        function refreshPixiChromeOnly() {
+            if (!treemapPixiViewport || !treemapPixiViewport.ready) return false;
+            const t0 = performance.now();
+            treemapPixiViewport.updateChrome({
+                getVisualState: getPixiVisualState,
+                hoverNode: lastHoveredNode,
+            });
+            const drawMs = performance.now() - t0;
+            if (window.TreemapBridge && window.TreemapBridge.recordTreemapPerf) {
+                window.TreemapBridge.recordTreemapPerf({
+                    drawMs,
+                    spriteCount: treemapPixiViewport.spriteCount,
+                    visibleCount: currentDrawnNodes.length,
+                    renderer: "pixi-chrome",
+                });
+            }
+            return true;
+        }
+
+        async function ensurePixiTreemapHost(width, height) {
+            if (!window.TreemapPixi || typeof window.TreemapPixi.ensurePixiViewport !== "function") {
+                throw new Error("TreemapPixi module not loaded");
+            }
+            const host = document.getElementById("treemap");
+            const vp = await window.TreemapPixi.ensurePixiViewport(host, {
+                width,
+                height,
+                onMouseMove: onCanvasMouseMove,
+                onMouseOut: onCanvasMouseOut,
+                onClick: onCanvasClick,
+            });
+            treemapPixiViewport = vp;
+            vp.resize(width, height);
+            return vp;
+        }
+
+        async function paintPixiFromVisible(visibleNodes, meta = {}) {
+            const wrapper = document.getElementById("canvas-wrapper");
+            const width = wrapper.clientWidth;
+            const height = wrapper.clientHeight;
+            const vp = await ensurePixiTreemapHost(width, height);
+            const t0 = performance.now();
+            const stats = vp.setRoot(visibleNodes, {
+                rootKey: meta.rootKey,
+                getBaseTint: (n) => {
+                    if (window.TreemapColorStyle && window.TreemapColorStyle.cssColorToUint) {
+                        return window.TreemapColorStyle.cssColorToUint(getEntityColor(n.data));
+                    }
+                    return 0x0369a1;
+                },
+                getVisualState: getPixiVisualState,
+                getLabel: getPixiLabelSpec,
+            });
+            treemapPixiRootKey = meta.rootKey || treemapPixiRootKey;
+            const drawMs = performance.now() - t0;
+            return { ...stats, drawMs, uploadMs: stats.uploadMs || 0 };
         }
 
         function buildLocalTreemapRoot(node, width, height) {
@@ -3645,14 +3893,34 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             return localRoot;
         }
 
-        function renderSpaceSnifferView(node) {
+        function renderSpaceSnifferView(node, options = {}) {
             const wrapper = document.getElementById("canvas-wrapper");
             const width = wrapper.clientWidth;
             const height = wrapper.clientHeight;
 
             if (width === 0 || height === 0) return;
 
-            ensureTreemapCanvas();
+            const mode = getTreemapRendererMode();
+            const chromeOnly = !!options.chromeOnly;
+            const rootKey = makeTreemapRootKey(node, width, height);
+
+            // Pixi: selection / legend chrome without re-treemap when geometry root unchanged.
+            if (
+                chromeOnly &&
+                mode === "pixi" &&
+                treemapPixiViewport &&
+                treemapPixiViewport.ready &&
+                treemapPixiRootKey === rootKey &&
+                currentDrawnNodes &&
+                currentDrawnNodes.length
+            ) {
+                refreshPixiChromeOnly();
+                return;
+            }
+
+            if (mode !== "pixi") {
+                ensureTreemapCanvas();
+            }
 
             const tLayout0 = performance.now();
             const localRoot = buildLocalTreemapRoot(node, width, height);
@@ -3661,9 +3929,10 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const allDescendants = localRoot.descendants();
             allDescendants.sort((a, b) => a.depth - b.depth);
 
-            const useWorker = isWorkerTreemapEnabled() && window.TreemapBridge;
+            const useWorker = (mode === "worker" || mode === "pixi") && window.TreemapBridge;
             if (!useWorker) {
                 treemapPackedLayout = null;
+                treemapPixiRootKey = null;
                 currentDrawnNodes = allDescendants;
                 const tDraw0 = performance.now();
                 drawCanvasState();
@@ -3682,19 +3951,59 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
 
             const gen = ++treemapRenderGeneration;
-            // Interim: show unpruned frame so zoom stays responsive, then replace with pruned.
-            currentDrawnNodes = allDescendants;
-            drawCanvasState();
-
             const bridge = window.TreemapBridge;
+
+            if (mode === "worker") {
+                // Interim: show unpruned frame so zoom stays responsive, then replace with pruned.
+                currentDrawnNodes = allDescendants;
+                drawCanvasState();
+            }
+
             bridge.packAndPrune(allDescendants, { width, height }, {
                 getTintCss: (n) => getEntityColor(n.data),
                 getRealBytes: (n) => getRealNodeSum(n),
                 formatBytes,
-            }).then((result) => {
+            }).then(async (result) => {
                 if (gen !== treemapRenderGeneration) return;
                 treemapPackedLayout = result.packed;
                 currentDrawnNodes = result.applied.visibleNodes;
+
+                if (mode === "pixi") {
+                    try {
+                        const paint = await paintPixiFromVisible(currentDrawnNodes, { rootKey });
+                        if (gen !== treemapRenderGeneration) return;
+                        bridge.recordTreemapPerf({
+                            layoutMs: layoutMs + (result.layoutMs || 0),
+                            workerMs: result.workerMs || 0,
+                            uploadMs: paint.uploadMs || 0,
+                            drawMs: paint.drawMs || 0,
+                            spriteCount: paint.spriteCount || currentDrawnNodes.length,
+                            visibleCount: result.applied.visibleCount || currentDrawnNodes.length,
+                            labelCount: paint.labelCount || 0,
+                            prunedCount: result.pruneResult ? result.pruneResult.prunedCount : 0,
+                            inputCount: result.pruneResult ? result.pruneResult.inputCount : allDescendants.length,
+                            renderer: "pixi",
+                        });
+                    } catch (err) {
+                        console.warn("[treemap] pixi paint failed; falling back to worker canvas", err);
+                        if (gen !== treemapRenderGeneration) return;
+                        ensureTreemapCanvas();
+                        const tDraw0 = performance.now();
+                        drawCanvasState();
+                        const drawMs = performance.now() - tDraw0;
+                        bridge.recordTreemapPerf({
+                            layoutMs: layoutMs + (result.layoutMs || 0),
+                            workerMs: result.workerMs || 0,
+                            drawMs,
+                            spriteCount: currentDrawnNodes.length,
+                            visibleCount: currentDrawnNodes.length,
+                            renderer: "pixi-fallback-worker",
+                            error: String(err && err.message ? err.message : err),
+                        });
+                    }
+                    return;
+                }
+
                 const tDraw0 = performance.now();
                 drawCanvasState();
                 const drawMs = performance.now() - tDraw0;
@@ -3712,6 +4021,9 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 console.warn("[treemap] worker prune failed; keeping classic draw", err);
                 if (gen !== treemapRenderGeneration) return;
                 currentDrawnNodes = allDescendants;
+                if (mode === "pixi") {
+                    ensureTreemapCanvas();
+                }
                 drawCanvasState();
                 window.__treemapPerf = {
                     ...(window.__treemapPerf || {}),
@@ -4565,7 +4877,14 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 applyActiveLineageFromNodeData(info);
             }
 
-            if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+            // Pixi: prefer selection/legend tint updates without re-running d3.treemap.
+            if (currentHierarchyNode) {
+                if (isPixiTreemapEnabled()) {
+                    renderSpaceSnifferView(currentHierarchyNode, { chromeOnly: true });
+                } else {
+                    renderSpaceSnifferView(currentHierarchyNode);
+                }
+            }
             
             let nodeTypeLabel = info.is_chain_hierarchy_node ? 'VDisk Chain' :
                 info.is_free ? 'Free Storage Space' :

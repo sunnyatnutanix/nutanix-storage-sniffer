@@ -42,19 +42,41 @@ function getPrunerWorker() {
 }
 
 /**
- * Feature flag: ?renderer=worker | localStorage treemap_renderer=worker
- * @returns {boolean}
+ * Resolve active treemap renderer mode.
+ * Query wins over localStorage. Values: classic | worker | pixi
+ * @returns {"classic"|"worker"|"pixi"}
  */
-export function isWorkerRendererEnabled() {
+export function getTreemapRendererMode() {
     try {
         const params = new URLSearchParams(window.location.search);
         const q = (params.get("renderer") || "").toLowerCase();
-        if (q === "worker") return true;
-        if (q === "classic" || q === "canvas") return false;
-        return localStorage.getItem("treemap_renderer") === "worker";
+        if (q === "pixi" || q === "webgl") return "pixi";
+        if (q === "worker") return "worker";
+        if (q === "classic" || q === "canvas" || q === "2d") return "classic";
+        const stored = (localStorage.getItem("treemap_renderer") || "").toLowerCase();
+        if (stored === "pixi" || stored === "webgl") return "pixi";
+        if (stored === "worker") return "worker";
+        return "classic";
     } catch (_) {
-        return false;
+        return "classic";
     }
+}
+
+/**
+ * Feature flag: worker SoA prune path (also true for pixi, which reuses prune).
+ * @returns {boolean}
+ */
+export function isWorkerRendererEnabled() {
+    const mode = getTreemapRendererMode();
+    return mode === "worker" || mode === "pixi";
+}
+
+/**
+ * Feature flag: ?renderer=pixi | localStorage treemap_renderer=pixi
+ * @returns {boolean}
+ */
+export function isPixiRendererEnabled() {
+    return getTreemapRendererMode() === "pixi";
 }
 
 /**
