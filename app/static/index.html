@@ -6,6 +6,21 @@
     <link rel="icon" type="image/png" href="/static/favicon-nutanix.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script type="module">
+        import * as TreemapBridge from "/static/js/treemap/layout-bridge.js";
+        import * as TreemapColorStyle from "/static/js/treemap/color-style.js";
+        window.TreemapBridge = TreemapBridge;
+        window.TreemapColorStyle = TreemapColorStyle;
+        window.__treemapPerf = window.__treemapPerf || {
+            layoutMs: 0,
+            workerMs: 0,
+            uploadMs: 0,
+            drawMs: 0,
+            hitTestMs: 0,
+            spriteCount: 0,
+            visibleCount: 0,
+        };
+    </script>
     <style>
         .flip-transition {
             transition: transform 380ms cubic-bezier(0.25, 1, 0.5, 1), opacity 380ms ease !important;
@@ -545,6 +560,9 @@
         let activeLegendFilter = null; 
         let currentDrawnNodes = [];
         let lastHoveredNode = null;
+        /** @type {object|null} latest packed SoA for worker renderer (nodeRefs → d3 nodes) */
+        let treemapPackedLayout = null;
+        let treemapRenderGeneration = 0;
         let loadedOfflineFileName = "";
         let loadedOfflineRawText = "";
         let loadedOfflineSections = [];
@@ -1303,6 +1321,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         }
 
         function getEntityColor(data) {
+            if (data && data.is_other_aggregate) return "#475569";
             if (isActiveLineageHighlight(data)) return themeColors.activeChain;
             if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return themeColors.sharedClone;
             if (data.is_chain_snap_share_block || data.name === "Chain Snap Share") {
@@ -3486,11 +3505,12 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
 
             if (found) {
-                if (found.children && found.depth > 0) canvas.style.cursor = "zoom-in";
-                else canvas.style.cursor = "pointer";
+                if ((found.children && found.depth > 0) || found.__syntheticOther || (found.data && found.data.is_other_aggregate)) {
+                    canvas.style.cursor = "zoom-in";
+                } else canvas.style.cursor = "pointer";
             } else canvas.style.cursor = "default";
 
-            if (found && (found.data.vdisk_id || found.data.is_shared_clone_block || found.data.is_shared_parent_vdisk || found.data.is_chain_snap_share_block || found.data.is_partial_extents_block || found.data.is_total_garbage_block || found.data.is_explicit_reserve_block)) {
+            if (found && (found.data.vdisk_id || found.data.is_other_aggregate || found.__syntheticOther || found.data.is_shared_clone_block || found.data.is_shared_parent_vdisk || found.data.is_chain_snap_share_block || found.data.is_partial_extents_block || found.data.is_total_garbage_block || found.data.is_explicit_reserve_block)) {
                 if (found !== lastHoveredNode) {
                     lastHoveredNode = found;
                     drawCanvasState(); 
@@ -3531,6 +3551,16 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             if (found) {
                 hideFloatingTooltip();
+                // Synthetic "Other small files" → zoom into parent folder (Phase 1 / Phase 4 contract).
+                if (found.__syntheticOther || (found.data && found.data.is_other_aggregate)) {
+                    const parentName = (found.data && found.data.other_parent_name)
+                        || (found.parent && found.parent.data && found.parent.data.name);
+                    const parentTarget = parentName
+                        ? findNodeByName(currentHierarchyNode, parentName)
+                        : (found.parent || null);
+                    if (parentTarget) zoomToNode(parentTarget, null, true, false);
+                    return;
+                }
                 const targetNode = findNodeByName(currentHierarchyNode, found.data.name);
 
                 if (found.children && found.depth > 0) {
@@ -3542,18 +3572,26 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
         }
 
-        function renderSpaceSnifferView(node) {
-            const wrapper = document.getElementById("canvas-wrapper");
-            const width = wrapper.clientWidth;
-            const height = wrapper.clientHeight;
+        function isWorkerTreemapEnabled() {
+            if (window.TreemapBridge && typeof window.TreemapBridge.isWorkerRendererEnabled === "function") {
+                return window.TreemapBridge.isWorkerRendererEnabled();
+            }
+            try {
+                const params = new URLSearchParams(window.location.search);
+                const q = (params.get("renderer") || "").toLowerCase();
+                if (q === "worker") return true;
+                if (q === "classic" || q === "canvas") return false;
+                return localStorage.getItem("treemap_renderer") === "worker";
+            } catch (_) {
+                return false;
+            }
+        }
 
-            if (width === 0 || height === 0) return;
-
+        function ensureTreemapCanvas() {
             const container = document.getElementById("treemap");
             let canvas = document.getElementById("treemap-canvas");
-            
             if (!canvas) {
-                container.innerHTML = ""; 
+                container.innerHTML = "";
                 canvas = document.createElement("canvas");
                 canvas.id = "treemap-canvas";
                 canvas.style.position = "absolute";
@@ -3564,7 +3602,10 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 canvas.addEventListener("click", onCanvasClick);
                 container.appendChild(canvas);
             }
+            return canvas;
+        }
 
+        function buildLocalTreemapRoot(node, width, height) {
             const localRoot = d3.hierarchy(node.data)
                 .sum(d => d.value || 0)
                 .sort((a, b) => b.value - a.value);
@@ -3601,11 +3642,89 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 return selfMatch || descendantMatch;
             }
             evaluateLocalSearch(localRoot, initialAncestorMatch);
+            return localRoot;
+        }
 
-            currentDrawnNodes = localRoot.descendants();
-            currentDrawnNodes.sort((a, b) => a.depth - b.depth);
+        function renderSpaceSnifferView(node) {
+            const wrapper = document.getElementById("canvas-wrapper");
+            const width = wrapper.clientWidth;
+            const height = wrapper.clientHeight;
 
+            if (width === 0 || height === 0) return;
+
+            ensureTreemapCanvas();
+
+            const tLayout0 = performance.now();
+            const localRoot = buildLocalTreemapRoot(node, width, height);
+            const layoutMs = performance.now() - tLayout0;
+
+            const allDescendants = localRoot.descendants();
+            allDescendants.sort((a, b) => a.depth - b.depth);
+
+            const useWorker = isWorkerTreemapEnabled() && window.TreemapBridge;
+            if (!useWorker) {
+                treemapPackedLayout = null;
+                currentDrawnNodes = allDescendants;
+                const tDraw0 = performance.now();
+                drawCanvasState();
+                const drawMs = performance.now() - tDraw0;
+                window.__treemapPerf = {
+                    ...(window.__treemapPerf || {}),
+                    layoutMs,
+                    workerMs: 0,
+                    drawMs,
+                    spriteCount: currentDrawnNodes.length,
+                    visibleCount: currentDrawnNodes.length,
+                    renderer: "classic",
+                    updatedAt: Date.now(),
+                };
+                return;
+            }
+
+            const gen = ++treemapRenderGeneration;
+            // Interim: show unpruned frame so zoom stays responsive, then replace with pruned.
+            currentDrawnNodes = allDescendants;
             drawCanvasState();
+
+            const bridge = window.TreemapBridge;
+            bridge.packAndPrune(allDescendants, { width, height }, {
+                getTintCss: (n) => getEntityColor(n.data),
+                getRealBytes: (n) => getRealNodeSum(n),
+                formatBytes,
+            }).then((result) => {
+                if (gen !== treemapRenderGeneration) return;
+                treemapPackedLayout = result.packed;
+                currentDrawnNodes = result.applied.visibleNodes;
+                const tDraw0 = performance.now();
+                drawCanvasState();
+                const drawMs = performance.now() - tDraw0;
+                bridge.recordTreemapPerf({
+                    layoutMs: layoutMs + (result.layoutMs || 0),
+                    workerMs: result.workerMs || 0,
+                    drawMs,
+                    spriteCount: result.applied.spriteCount || currentDrawnNodes.length,
+                    visibleCount: result.applied.visibleCount || currentDrawnNodes.length,
+                    prunedCount: result.pruneResult ? result.pruneResult.prunedCount : 0,
+                    inputCount: result.pruneResult ? result.pruneResult.inputCount : allDescendants.length,
+                    renderer: "worker",
+                });
+            }).catch((err) => {
+                console.warn("[treemap] worker prune failed; keeping classic draw", err);
+                if (gen !== treemapRenderGeneration) return;
+                currentDrawnNodes = allDescendants;
+                drawCanvasState();
+                window.__treemapPerf = {
+                    ...(window.__treemapPerf || {}),
+                    layoutMs,
+                    workerMs: 0,
+                    drawMs: 0,
+                    spriteCount: currentDrawnNodes.length,
+                    visibleCount: currentDrawnNodes.length,
+                    renderer: "classic-fallback",
+                    error: String(err && err.message ? err.message : err),
+                    updatedAt: Date.now(),
+                };
+            });
         }
 
         function getTreemapLayoutMetrics() {
@@ -3712,7 +3831,10 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     ctx.clip();
                     
                     let textY = d.y0 + 13;
-                    if (d.data.is_shared_clone_block) {
+                    if (d.data.is_other_aggregate || d.__syntheticOther) {
+                        ctx.font = `bold ${Math.round(10 * textScale)}px sans-serif`;
+                        drawTreemapLabel(ctx, d.data.name || "Other small files", d.x0 + 4, textY, { fill: labelFill });
+                    } else if (d.data.is_shared_clone_block) {
                         ctx.font = `bold ${Math.round(10 * textScale)}px monospace`;
                         drawTreemapLabel(ctx, "🔗 Chain Fam", d.x0 + 4, textY, { fill: isHighlight ? "#fbbf24" : labelFill });
                         drawTreemapLabel(ctx, `Size: ${d.data.formatted_size}`, d.x0 + 4, textY + 12, { fill: labelFill });
@@ -3817,6 +3939,19 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const isVgGroup = info.name && String(info.name).startsWith("VG:");
 
             let html = `<div class="font-bold text-sky-400 border-b border-slate-700 pb-1 mb-1 break-all">${getDisplayNodeName(info)}</div>`;
+
+            if (info.is_other_aggregate || d.__syntheticOther) {
+                html += `
+                    <div><span class="text-slate-400">Aggregated:</span> <span class="text-amber-300 font-bold">${info.other_count || 0} small items</span></div>
+                    <div><span class="text-slate-400">Combined size:</span> <span class="text-emerald-300 font-bold">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
+                    <div class="text-[0.85em] text-slate-500 mt-1">Click to zoom into parent folder</div>
+                `;
+                tooltip.innerHTML = html;
+                applyTooltipTextStyle();
+                tooltip.classList.remove("hidden");
+                moveFloatingTooltip(event);
+                return;
+            }
 
             if (info.is_partial_extents_block) {
                 html += `
