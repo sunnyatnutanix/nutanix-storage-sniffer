@@ -528,6 +528,10 @@
         let activeTimeFilter = null; // null | {kind:"relative",amount,unit} | {kind:"after"|"before"|"between",startMs?,endMs?}
         let timeFilterTab = "basic";
         let nodeTreeRowMap = new Map();
+        const TREE_PAGE_INITIAL = 200;
+        const TREE_PAGE_STEP = 100;
+        let sidebarRootNode = null;
+        let sidebarIsFiltering = false;
         let activeChainId = null;
         let activeChainVDiskIds = new Set();
         let activeMemberChainIds = new Set();
@@ -2803,34 +2807,66 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const container = document.getElementById("hierarchy-tree-container");
             if (!container) return;
             const key = chainMetricDatasetKey(chainSortMetric);
-            container.querySelectorAll(".tree-children").forEach(childrenEl => {
-                const wrappers = Array.from(childrenEl.children);
-                const chainWrappers = [];
-                const others = [];
-                wrappers.forEach(wrapper => {
-                    const row = wrapper.querySelector(":scope > .tree-row");
-                    if (row && row.dataset.chainRow === "1") chainWrappers.push(wrapper);
-                    else others.push(wrapper);
+
+            if (sidebarRootNode) {
+                sidebarRootNode.each(parent => {
+                    if (!parent.treeChildrenEl || !parent.children || !parent.children.length) return;
+                    const childList = parent._treePageChildren || getOrderedTreeChildren(parent, sidebarIsFiltering);
+                    const chainNodes = [];
+                    const otherNodes = [];
+                    childList.forEach(child => {
+                        if (child.data && child.data.is_chain_hierarchy_node) chainNodes.push(child);
+                        else otherNodes.push(child);
+                    });
+                    if (!chainNodes.length) return;
+
+                    chainNodes.sort((a, b) => {
+                        const av = chainMetricBytes(a.data.chain_stats);
+                        const bv = chainMetricBytes(b.data.chain_stats);
+                        if (bv !== av) return bv - av;
+                        return String(a.data.name || "").localeCompare(String(b.data.name || ""));
+                    });
+
+                    const newOrder = chainNodes.concat(otherNodes);
+                    parent._treePageChildren = newOrder;
+                    if (!sidebarIsFiltering && Array.isArray(parent.children) && newOrder.length === parent.children.length) {
+                        parent.children.splice(0, parent.children.length, ...newOrder);
+                    }
+                    remountVisibleTreeChildren(parent);
                 });
-                if (!chainWrappers.length) return;
-                chainWrappers.sort((a, b) => {
-                    const aRow = a.querySelector(":scope > .tree-row");
-                    const bRow = b.querySelector(":scope > .tree-row");
-                    const av = Number(aRow.dataset[key] || 0);
-                    const bv = Number(bRow.dataset[key] || 0);
-                    if (bv !== av) return bv - av;
-                    const aName = aRow.querySelector(".name") ? aRow.querySelector(".name").textContent : "";
-                    const bName = bRow.querySelector(".name") ? bRow.querySelector(".name").textContent : "";
-                    return String(aName).localeCompare(String(bName));
+            } else {
+                container.querySelectorAll(".tree-children").forEach(childrenEl => {
+                    const loadMore = childrenEl.querySelector(':scope > [data-tree-load-more="1"]');
+                    const wrappers = Array.from(childrenEl.children).filter(el => el !== loadMore);
+                    const chainWrappers = [];
+                    const others = [];
+                    wrappers.forEach(wrapper => {
+                        if (wrapper.dataset && wrapper.dataset.treeLoadMore === "1") return;
+                        const row = wrapper.querySelector(":scope > .tree-row");
+                        if (row && row.dataset.chainRow === "1") chainWrappers.push(wrapper);
+                        else others.push(wrapper);
+                    });
+                    if (!chainWrappers.length) return;
+                    chainWrappers.sort((a, b) => {
+                        const aRow = a.querySelector(":scope > .tree-row");
+                        const bRow = b.querySelector(":scope > .tree-row");
+                        const av = Number(aRow.dataset[key] || 0);
+                        const bv = Number(bRow.dataset[key] || 0);
+                        if (bv !== av) return bv - av;
+                        const aName = aRow.querySelector(".name") ? aRow.querySelector(".name").textContent : "";
+                        const bName = bRow.querySelector(".name") ? bRow.querySelector(".name").textContent : "";
+                        return String(aName).localeCompare(String(bName));
+                    });
+                    chainWrappers.forEach(wrapper => childrenEl.appendChild(wrapper));
+                    others.forEach(wrapper => childrenEl.appendChild(wrapper));
+                    if (loadMore) childrenEl.appendChild(loadMore);
                 });
-                chainWrappers.forEach(wrapper => {
-                    const row = wrapper.querySelector(":scope > .tree-row");
-                    const bytes = Number(row.dataset[key] || 0);
-                    const sizeEl = row.querySelector(".size");
-                    if (sizeEl) sizeEl.textContent = formatBytes(bytes);
-                    childrenEl.appendChild(wrapper);
-                });
-                others.forEach(wrapper => childrenEl.appendChild(wrapper));
+            }
+
+            container.querySelectorAll(".tree-row[data-chain-row='1']").forEach(row => {
+                const bytes = Number(row.dataset[key] || 0);
+                const sizeEl = row.querySelector(".size");
+                if (sizeEl) sizeEl.textContent = formatBytes(bytes);
             });
             container.querySelectorAll("[data-unmapped-folder='1']").forEach(row => {
                 const wrapper = row.parentElement;
@@ -3096,10 +3132,143 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             return d3.hierarchy(buildChainHierarchyData(fullRootNode.data));
         }
 
+        function resetTreePaginationState(rootD3Node) {
+            if (!rootD3Node || typeof rootD3Node.each !== "function") return;
+            rootD3Node.each(n => {
+                n.treeVisibleCount = undefined;
+                n._treePageChildren = undefined;
+                n.treeChildrenEl = undefined;
+                n.treeRowId = undefined;
+            });
+        }
+
+        function getOrderedTreeChildren(d3Node, isFiltering) {
+            if (!d3Node || !d3Node.children || !d3Node.children.length) return [];
+            if (!isFiltering) return d3Node.children.slice();
+            return d3Node.children.filter(child => child.isEffectiveSearchMatch);
+        }
+
+        function clearTreeRowIdsDeep(d3Node) {
+            if (!d3Node) return;
+            d3Node.treeRowId = undefined;
+            d3Node.treeChildrenEl = undefined;
+            if (d3Node.children) d3Node.children.forEach(clearTreeRowIdsDeep);
+        }
+
+        function refreshLoadMoreControl(parentD3Node) {
+            const childrenContainer = parentD3Node && parentD3Node.treeChildrenEl;
+            if (!childrenContainer) return;
+            const existing = childrenContainer.querySelector(':scope > [data-tree-load-more="1"]');
+            if (existing) existing.remove();
+
+            const childList = parentD3Node._treePageChildren || [];
+            const visible = parentD3Node.treeVisibleCount || 0;
+            const remaining = childList.length - visible;
+            if (remaining <= 0) return;
+
+            const step = Math.min(TREE_PAGE_STEP, remaining);
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.dataset.treeLoadMore = "1";
+            btn.className = "w-full text-left px-1.5 py-1 text-[10px] text-sky-400 hover:text-sky-300 hover:bg-slate-700/40 rounded my-0.5 font-medium";
+            btn.textContent = remaining <= TREE_PAGE_STEP
+                ? `Show remaining ${remaining}`
+                : `Load ${step} more (${remaining} remaining)`;
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                loadMoreTreeChildren(parentD3Node);
+            };
+            childrenContainer.appendChild(btn);
+        }
+
+        function appendTreeChildrenRange(parentD3Node, fromIndex, toIndex) {
+            const childrenContainer = parentD3Node.treeChildrenEl;
+            if (!childrenContainer) return;
+            const childList = parentD3Node._treePageChildren || [];
+            const isFiltering = sidebarIsFiltering;
+            for (let i = fromIndex; i < toIndex && i < childList.length; i++) {
+                const childDOM = createTreeNodeDOM(childList[i], isFiltering);
+                if (childDOM) childrenContainer.appendChild(childDOM);
+            }
+        }
+
+        function loadMoreTreeChildren(parentD3Node) {
+            if (!parentD3Node || !parentD3Node.treeChildrenEl) return;
+            const childList = parentD3Node._treePageChildren || getOrderedTreeChildren(parentD3Node, sidebarIsFiltering);
+            parentD3Node._treePageChildren = childList;
+            const prev = parentD3Node.treeVisibleCount || 0;
+            const next = Math.min(prev + TREE_PAGE_STEP, childList.length);
+            if (next <= prev) {
+                refreshLoadMoreControl(parentD3Node);
+                return;
+            }
+            const existing = parentD3Node.treeChildrenEl.querySelector(':scope > [data-tree-load-more="1"]');
+            if (existing) existing.remove();
+            appendTreeChildrenRange(parentD3Node, prev, next);
+            parentD3Node.treeVisibleCount = next;
+            refreshLoadMoreControl(parentD3Node);
+        }
+
+        function remountVisibleTreeChildren(parentD3Node) {
+            if (!parentD3Node || !parentD3Node.treeChildrenEl) return;
+            const childrenContainer = parentD3Node.treeChildrenEl;
+            const childList = parentD3Node._treePageChildren || getOrderedTreeChildren(parentD3Node, sidebarIsFiltering);
+            parentD3Node._treePageChildren = childList;
+            childList.forEach(clearTreeRowIdsDeep);
+            childrenContainer.innerHTML = "";
+            const visible = Math.min(parentD3Node.treeVisibleCount || TREE_PAGE_INITIAL, childList.length);
+            parentD3Node.treeVisibleCount = visible;
+            appendTreeChildrenRange(parentD3Node, 0, visible);
+            refreshLoadMoreControl(parentD3Node);
+        }
+
+        function mountPagedTreeChildren(parentD3Node, childrenContainer, isFiltering) {
+            const childList = getOrderedTreeChildren(parentD3Node, isFiltering);
+            parentD3Node._treePageChildren = childList;
+            parentD3Node.treeChildrenEl = childrenContainer;
+            parentD3Node.treeVisibleCount = Math.min(TREE_PAGE_INITIAL, childList.length);
+            appendTreeChildrenRange(parentD3Node, 0, parentD3Node.treeVisibleCount);
+            refreshLoadMoreControl(parentD3Node);
+        }
+
+        function ensureTreeChildrenMountedUpTo(parentD3Node, childD3Node) {
+            if (!parentD3Node || !childD3Node || !parentD3Node.treeChildrenEl) return false;
+            const childList = parentD3Node._treePageChildren || getOrderedTreeChildren(parentD3Node, sidebarIsFiltering);
+            parentD3Node._treePageChildren = childList;
+            const idx = childList.indexOf(childD3Node);
+            if (idx < 0) return false;
+            const needed = idx + 1;
+            const prev = parentD3Node.treeVisibleCount || 0;
+            if (needed <= prev) return true;
+            const existing = parentD3Node.treeChildrenEl.querySelector(':scope > [data-tree-load-more="1"]');
+            if (existing) existing.remove();
+            appendTreeChildrenRange(parentD3Node, prev, needed);
+            parentD3Node.treeVisibleCount = needed;
+            refreshLoadMoreControl(parentD3Node);
+            return true;
+        }
+
+        function ensureTreeNodeMounted(d3Node) {
+            if (!d3Node) return;
+            const path = [];
+            let curr = d3Node;
+            while (curr) {
+                path.unshift(curr);
+                curr = curr.parent;
+            }
+            for (let i = 0; i < path.length - 1; i++) {
+                ensureTreeChildrenMountedUpTo(path[i], path[i + 1]);
+            }
+            expandAncestorsForNode(d3Node);
+        }
+
         function renderHierarchyTree(rootD3Node, isFiltering = false) {
             const container = document.getElementById("hierarchy-tree-container");
             container.innerHTML = "";
             nodeTreeRowMap.clear();
+            resetTreePaginationState(rootD3Node);
+            sidebarRootNode = rootD3Node;
+            sidebarIsFiltering = !!isFiltering;
 
             const treeDOM = createTreeNodeDOM(rootD3Node, isFiltering);
             if (treeDOM) container.appendChild(treeDOM);
@@ -3151,7 +3320,9 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             wrapper.dataset.expandKey = hierarchyExpandKey(d3Node);
 
             const hasChildren = d3Node.children && d3Node.children.length > 0;
-            const realSum = getRealNodeSum(d3Node);
+            const realSum = (hierarchyViewMode === "chain" && d3Node.data.is_chain_hierarchy_node)
+                ? chainMetricBytes(d3Node.data.chain_stats)
+                : getRealNodeSum(d3Node);
             const displaySize = formatBytes(realSum);
             const icon = getNodeIcon(d3Node);
             const chainTitle = d3Node.data.is_chain_hierarchy_node
@@ -3191,11 +3362,8 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (hasChildren) {
                 const childrenContainer = document.createElement("div");
                 childrenContainer.className = "tree-children hidden pl-3 ml-2 border-l border-slate-700/60 space-y-0.5";
-                
-                d3Node.children.forEach(childD3Node => {
-                    const childDOM = createTreeNodeDOM(childD3Node, isFiltering);
-                    if (childDOM) childrenContainer.appendChild(childDOM);
-                });
+
+                mountPagedTreeChildren(d3Node, childrenContainer, isFiltering);
 
                 wrapper.appendChild(childrenContainer);
 
@@ -3250,7 +3418,28 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
         }
 
+        function expandAncestorsForNode(d3Node) {
+            if (!d3Node) return;
+            let curr = d3Node.parent;
+            while (curr) {
+                if (curr.treeRowId) {
+                    const parentRow = document.getElementById(curr.treeRowId);
+                    if (parentRow) {
+                        const parentWrapper = parentRow.parentElement;
+                        const childrenContainer = parentWrapper.querySelector(".tree-children");
+                        const caretBtn = parentRow.querySelector(".caret-btn");
+                        if (childrenContainer && caretBtn) {
+                            toggleTreeNodeExpand(parentWrapper, childrenContainer, caretBtn, true);
+                        }
+                    }
+                }
+                curr = curr.parent;
+            }
+        }
+
         function syncTreeHighlight(targetNode) {
+            if (targetNode) ensureTreeNodeMounted(targetNode);
+
             document.querySelectorAll(".tree-row").forEach(el => {
                 el.classList.remove("bg-sky-600/30", "border-sky-500", "text-sky-300", "font-bold", "bg-amber-500/20", "border-amber-400", "text-amber-300");
             });
@@ -3272,26 +3461,12 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                         const row = document.getElementById(n.treeRowId);
                         if (row) {
                             row.classList.add("bg-amber-500/20", "border-amber-400", "text-amber-300");
-
-                            let curr = n.parent;
-                            while (curr) {
-                                if (curr.treeRowId) {
-                                    const parentRow = document.getElementById(curr.treeRowId);
-                                    if (parentRow) {
-                                        const parentWrapper = parentRow.parentElement;
-                                        const childrenContainer = parentWrapper.querySelector(".tree-children");
-                                        const caretBtn = parentRow.querySelector(".caret-btn");
-                                        if (childrenContainer && caretBtn) {
-                                            toggleTreeNodeExpand(parentWrapper, childrenContainer, caretBtn, true);
-                                        }
-                                    }
-                                }
-                                curr = curr.parent;
-                            }
                         }
                     }
                 });
             }
+
+            expandAncestorsForNode(targetNode);
 
             if (targetNode && targetNode.treeRowId) {
                 const activeRow = document.getElementById(targetNode.treeRowId);
@@ -4329,9 +4504,23 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             return html;
         }
 
+        function findSidebarChainNodes(chainId) {
+            const cid = String(chainId || "");
+            const matches = [];
+            if (!cid || !sidebarRootNode || typeof sidebarRootNode.each !== "function") return matches;
+            sidebarRootNode.each(n => {
+                if (n.data && n.data.is_chain_hierarchy_node && String(n.data.chain_id || "") === cid) {
+                    matches.push(n);
+                }
+            });
+            return matches;
+        }
+
         function highlightChainHierarchyRow(chainId) {
             if (hierarchyViewMode !== "chain") return;
             const cid = String(chainId || "");
+            findSidebarChainNodes(cid).forEach(node => ensureTreeNodeMounted(node));
+
             document.querySelectorAll("#hierarchy-tree-container .tree-row").forEach(el => {
                 el.classList.remove("bg-sky-600/30", "border-sky-500", "text-sky-300", "font-bold");
             });
