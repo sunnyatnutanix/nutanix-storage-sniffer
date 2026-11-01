@@ -22,6 +22,60 @@
             pointer-events: none;
         }
 
+        .hamburgers {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .hamburger {
+            cursor: pointer;
+            padding-bottom: 3px;
+            position: relative;
+            display: inline-block;
+            line-height: 0;
+        }
+
+        .hamburger input {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            cursor: pointer;
+            opacity: 0;
+            z-index: 2;
+        }
+
+        .hamburger .bar {
+            display: block;
+            width: 30px;
+            height: 3px;
+            margin: 6px auto;
+            border-radius: 40px;
+            transition: all 0.3s cubic-bezier(0.37, -1.11, 0.79, 2.02);
+            background-color: #38bdf8;
+        }
+
+        .hamburger:hover .bar {
+            background-color: #7dd3fc;
+        }
+
+        .hamburger input:focus {
+            outline: none;
+        }
+
+        .hamburger input:checked ~ .bar:nth-child(2) {
+            transform: translateY(9.5px) rotate(45deg);
+        }
+
+        .hamburger input:checked ~ .bar:nth-child(3) {
+            opacity: 0;
+        }
+
+        .hamburger input:checked ~ .bar:nth-child(4) {
+            transform: translateY(-8px) rotate(-45deg);
+        }
+
         .resizer {
             width: 8px;
             cursor: col-resize;
@@ -136,6 +190,25 @@
         details > summary::-webkit-details-marker {
             display: none;
         }
+
+        #hierarchy-tree-container.virtual-tree {
+            position: relative;
+            padding: 0.5rem;
+        }
+
+        #hierarchy-tree-inner {
+            position: relative;
+            width: 100%;
+        }
+
+        #hierarchy-tree-inner .tree-row {
+            position: absolute;
+            left: 0;
+            width: 100%;
+            height: 30px;
+            box-sizing: border-box;
+            margin: 0;
+        }
     </style>
 </head>
 <body class="bg-slate-950 text-slate-300 flex flex-col h-screen overflow-hidden">
@@ -198,7 +271,7 @@
                             <option value="before">Before</option>
                             <option value="between">Between</option>
                         </select>
-                        <button type="button" onclick="applyAdvancedTimeFilter()" class="px-2 py-1 rounded bg-sky-700/80 hover:bg-sky-600 text-white text-[11px] font-semibold">Apply</button>
+                        <button type="button" onclick="applyAdvancedTimeFilter(true)" class="px-2 py-1 rounded bg-sky-700/80 hover:bg-sky-600 text-white text-[11px] font-semibold">Apply</button>
                     </div>
                     <div id="time-advanced-after-row" class="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
                         <span>After</span>
@@ -369,14 +442,16 @@
     </div>
 
     <!-- Top Connection Header -->
-    <header class="bg-slate-950 border-b border-slate-800 px-6 py-3 flex flex-nowrap justify-between items-center gap-4 flex-shrink-0 z-20 overflow-x-auto">
+    <header class="bg-slate-950 border-b border-slate-800 pl-[13.5px] pr-6 py-3 flex flex-nowrap justify-between items-center gap-4 flex-shrink-0 z-20 overflow-x-auto">
         <div class="flex items-center space-x-3 flex-shrink-0">
-            <button id="sidebar-toggle-btn" onclick="toggleSidebar()" title="Toggle Sidebar"
-                    class="p-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sky-400 transition focus:outline-none flex items-center justify-center">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
-                </svg>
-            </button>
+            <div class="hamburgers">
+                <label class="hamburger" title="Toggle Sidebar">
+                    <input id="sidebar-toggle-btn" type="checkbox" checked aria-label="Toggle Sidebar" aria-expanded="true" onchange="toggleSidebar()">
+                    <span class="bar"></span>
+                    <span class="bar"></span>
+                    <span class="bar"></span>
+                </label>
+            </div>
             <h1 class="text-xl font-bold text-slate-200">Nutanix Storage Sniffer</h1>
 
         </div>
@@ -430,23 +505,31 @@
             
             <!-- Top Hierarchy Section -->
             <div id="hierarchy-wrapper" class="flex flex-col min-h-[100px] overflow-hidden" style="flex: 1 1 0%;">
-                <button id="hierarchy-mode-toggle" type="button" onclick="toggleHierarchyViewMode()"
-                        class="w-full text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex-shrink-0 text-center hover:text-sky-300 cursor-pointer"
-                        title="Click to switch to chain view">Storage Hierarchy</button>
-                <div id="chain-sort-row" class="hidden mb-2 flex-shrink-0 flex items-center justify-center gap-1 text-[10px] whitespace-nowrap">
+                <div class="flex items-center mb-2 flex-shrink-0">
+                    <button id="hierarchy-mode-toggle" type="button" onclick="toggleHierarchyViewMode()"
+                            class="shrink-0 w-6 h-6 flex items-center justify-center text-slate-400 hover:text-sky-300"
+                            title="Switch to chain view">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h11m0 0l-3-3m3 3l-3 3M17 17H6m0 0l3 3m-3-3l3-3"></path>
+                        </svg>
+                    </button>
+                    <h2 id="hierarchy-mode-title" class="flex-1 text-center text-xs font-semibold text-slate-400 uppercase tracking-wider">Storage Hierarchy</h2>
+                    <span class="w-6 shrink-0" aria-hidden="true"></span>
+                </div>
+                <div id="chain-sort-row" class="hidden mb-2 flex-shrink-0 flex items-center justify-center gap-1 text-[14px] whitespace-nowrap">
                     <span class="text-slate-300 shrink-0 mr-1">order by</span>
                     <button type="button" data-metric="logical_live" onclick="setChainSortMetric('logical_live')"
                             title="Logical live usage"
-                            class="chain-metric-btn px-1.5 py-0.5 text-sky-300 font-semibold">Live</button>
+                            class="chain-metric-btn px-1.5 py-0.5 text-sky-300 font-semibold">Live</button> |
                     <button type="button" data-metric="logical_shared_clone" onclick="setChainSortMetric('logical_shared_clone')"
                             title="Logical shared clone"
-                            class="chain-metric-btn px-1.5 py-0.5 text-slate-400 hover:text-sky-300">Clone</button>
+                            class="chain-metric-btn px-1.5 py-0.5 text-slate-400 hover:text-sky-300">Clone</button> |
                     <button type="button" data-metric="physical_peg" onclick="setChainSortMetric('physical_peg')"
                             title="PEG"
                             class="chain-metric-btn px-1.5 py-0.5 text-slate-400 hover:text-sky-300">PEG</button>
                 </div>
-                <div id="hierarchy-tree-container" class="flex-1 overflow-y-auto pr-1 space-y-1 bg-slate-950 p-2 rounded border border-slate-800 font-sans">
-                    <p class="text-xs text-slate-500 italic text-center">No storage pool loaded.</p>
+                <div id="hierarchy-tree-container" class="virtual-tree flex-1 overflow-y-auto overflow-x-hidden bg-slate-950 rounded border border-slate-800 font-sans">
+                    <p class="text-xs text-slate-500 italic text-center p-2">No storage pool loaded.</p>
                 </div>
             </div>
 
@@ -522,6 +605,14 @@
         let chainSortMetric = "logical_live";
         let savedChainExpandKeys = null;
         let savedChainScrollTop = 0;
+        let pendingChainScrollRestore = null;
+        const TREE_ROW_HEIGHT = 30;
+        const TREE_OVERSCAN = 12;
+        let treeExpandedKeys = new Set();
+        let virtualFlatRows = [];
+        let virtualTreeRoot = null;
+        let virtualTreeFiltering = false;
+        let selectedTreeExpandKey = null;
         let currentHierarchyNode = null;
         let isAnimating = false;
         let activeSearchQuery = "";
@@ -910,6 +1001,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 document.body.classList.remove("is-v-resizing");
                 window.removeEventListener("mousemove", handleVMouseMove);
                 window.removeEventListener("mouseup", handleVMouseUp);
+                if (virtualFlatRows.length) paintVirtualTree();
             }
         }
 
@@ -1392,7 +1484,10 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
         });
         window.addEventListener("click", () => hideLegendFilterMenu());
-        window.addEventListener("resize", () => positionLegendFilterMenu());
+        window.addEventListener("resize", () => {
+            positionLegendFilterMenu();
+            if (virtualFlatRows.length) paintVirtualTree();
+        });
         window.addEventListener("scroll", () => positionLegendFilterMenu(), true);
 
         function openSearchModal() {
@@ -1493,6 +1588,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             updateTimeFilterSummary();
             updateSearchClearVisibility();
             applySearchAndRender();
+            closeSearchModal();
         }
 
         function datetimeLocalToMs(value) {
@@ -1512,6 +1608,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             updateTimeFilterSummary();
             updateSearchClearVisibility();
             applySearchAndRender();
+            closeSearchModal();
         }
 
         function applyRelativeCustom() {
@@ -1526,6 +1623,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             updateTimeFilterSummary();
             updateSearchClearVisibility();
             applySearchAndRender();
+            closeSearchModal();
         }
 
         function applyAdvancedTimeFilter(shouldCloseModal = false) {
@@ -1866,18 +1964,23 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             });
         }
 
-        function inspectorCopyTarget(node) {
-            let el = node && node.nodeType === 1 ? node : (node && node.parentElement);
-            if (!el || !el.closest("#inspector-summary")) return null;
-            if (el.closest("button, a, summary, #inspector-advanced")) return null;
-            if (el.classList.contains("copy-hover-icon") || el.classList.contains("copied-label")) el = el.parentElement;
-            const span = el.closest("span");
-            if (span && span.closest("#inspector-summary") && !span.classList.contains("copy-hover-icon") && !span.classList.contains("copied-label")) {
-                return span;
+        function inspectorCopyValue(info) {
+            if (!info) return "";
+            if (info.is_chain_hierarchy_node || info.is_chain_snap_share_block) {
+                return String(info.chain_id || info.name || "").trim();
             }
-            const row = el.closest("div");
-            if (row && row.id !== "inspector-summary" && row.closest("#inspector-summary")) return row;
-            return null;
+            if (info.vdisk_id !== undefined && info.vdisk_id !== null && String(info.vdisk_id).trim() !== "" && !info.is_shared_parent_vdisk && !info.is_shared_clone_block) {
+                return String(info.vdisk_id).trim();
+            }
+            return "";
+        }
+
+        function inspectorCopyTarget(node) {
+            const title = document.getElementById("inspector-copy-title");
+            if (!title || !node) return null;
+            const el = node.nodeType === 1 ? node : node.parentElement;
+            if (!el || !title.contains(el)) return null;
+            return title;
         }
 
         function inspectorCopyText(el) {
@@ -2492,6 +2595,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         function toggleSidebar() {
             const sidebar = document.getElementById("sidebar");
             const resizer = document.getElementById("resizer");
+            const toggle = document.getElementById("sidebar-toggle-btn");
             
             if (sidebar.classList.contains("sidebar-collapsed")) {
                 sidebar.classList.remove("sidebar-collapsed");
@@ -2501,6 +2605,12 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 sidebar.classList.add("sidebar-collapsed");
                 sidebar.style.width = "0px";
                 resizer.classList.add("hidden");
+            }
+
+            const open = !sidebar.classList.contains("sidebar-collapsed");
+            if (toggle) {
+                toggle.checked = open;
+                toggle.setAttribute("aria-expanded", open ? "true" : "false");
             }
 
             setTimeout(() => {
@@ -2573,6 +2683,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     .sum(d => d.value || 0)
                     .sort((a, b) => b.value - a.value);
                 rebuildLineageIndexes();
+                resetHierarchyTreeState();
                 
                 const usedSpaceNode = findNodeByName(fullRootNode, rawTreeData.children ? rawTreeData.children[0].name : "");
                 currentHierarchyNode = usedSpaceNode || fullRootNode;
@@ -2596,6 +2707,18 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
         }
 
+        function resetHierarchyTreeState() {
+            treeExpandedKeys = new Set();
+            savedChainExpandKeys = null;
+            savedChainScrollTop = 0;
+            pendingChainScrollRestore = null;
+            selectedTreeExpandKey = null;
+            virtualFlatRows = [];
+            virtualTreeRoot = null;
+            virtualTreeFiltering = false;
+            nodeTreeRowMap.clear();
+        }
+
         function applyScanTreeData(data) {
             rawTreeData = data.tree;
 
@@ -2603,6 +2726,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 .sum(d => d.value || 0)
                 .sort((a, b) => b.value - a.value);
             rebuildLineageIndexes();
+            resetHierarchyTreeState();
 
             const usedSpaceNode = findNodeByName(fullRootNode, rawTreeData.children ? rawTreeData.children[0].name : "");
             currentHierarchyNode = usedSpaceNode || fullRootNode;
@@ -2735,10 +2859,15 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             while (curr) {
                 const data = curr.data || {};
                 let part;
+                // Prefer vdisk_id before container_id: leaf vdisks also carry container_id,
+                // and using container_id first made sibling disks share one expand/selection key.
                 if (data.is_chain_hierarchy_node) part = `chain:${data.chain_id || ""}`;
                 else if (data.is_unmapped_chain_folder) part = "unmapped";
-                else if (data.container_id !== undefined && data.container_id !== null && String(data.container_id).trim() !== "") part = `ctr:${data.container_id}`;
+                else if (data.is_chain_snap_share_block) part = `css:${data.chain_id || data.name || ""}`;
+                else if (data.is_shared_clone_block) part = `sclone:${data.chain_id || data.name || ""}`;
+                else if (data.is_shared_parent_vdisk) part = `shared:${resolveNodeLineageId(data) || data.chain_id || data.name || ""}`;
                 else if (data.vdisk_id !== undefined && data.vdisk_id !== null && String(data.vdisk_id).trim() !== "") part = `vd:${data.vdisk_id}`;
+                else if (data.container_id !== undefined && data.container_id !== null && String(data.container_id).trim() !== "") part = `ctr:${data.container_id}`;
                 else part = `name:${data.name || ""}`;
                 parts.push(part);
                 curr = curr.parent;
@@ -2748,31 +2877,21 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         function captureChainExpandState() {
             const container = document.getElementById("hierarchy-tree-container");
-            if (!container) return;
-            const keys = new Set();
-            container.querySelectorAll(".tree-node-wrapper").forEach(wrapper => {
-                const childrenEl = wrapper.querySelector(":scope > .tree-children");
-                if (!childrenEl || childrenEl.classList.contains("hidden")) return;
-                if (wrapper.dataset.expandKey) keys.add(wrapper.dataset.expandKey);
-            });
-            savedChainExpandKeys = keys;
-            savedChainScrollTop = container.scrollTop;
-        }
-
-        function restoreChainExpandState(container) {
-            if (!container || !savedChainExpandKeys) return;
-            container.querySelectorAll(".tree-node-wrapper").forEach(wrapper => {
-                if (!savedChainExpandKeys.has(wrapper.dataset.expandKey || "")) return;
-                const childrenEl = wrapper.querySelector(":scope > .tree-children");
-                const caretBtn = wrapper.querySelector(":scope > .tree-row .caret-btn");
-                if (childrenEl && caretBtn) toggleTreeNodeExpand(wrapper, childrenEl, caretBtn, true);
-            });
-            container.scrollTop = savedChainScrollTop;
+            savedChainExpandKeys = new Set(treeExpandedKeys);
+            savedChainScrollTop = container ? container.scrollTop : 0;
         }
 
         function toggleHierarchyViewMode() {
-            if (hierarchyViewMode === "chain") captureChainExpandState();
-            hierarchyViewMode = hierarchyViewMode === "chain" ? "disk" : "chain";
+            if (hierarchyViewMode === "chain") {
+                captureChainExpandState();
+                hierarchyViewMode = "disk";
+                treeExpandedKeys = new Set();
+                pendingChainScrollRestore = null;
+            } else {
+                hierarchyViewMode = "chain";
+                treeExpandedKeys = savedChainExpandKeys ? new Set(savedChainExpandKeys) : new Set();
+                pendingChainScrollRestore = savedChainExpandKeys ? savedChainScrollTop : null;
+            }
             updateHierarchyModeControls();
             if (fullRootNode) applySearchAndRender();
         }
@@ -2781,13 +2900,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (metric !== "logical_live" && metric !== "logical_shared_clone" && metric !== "physical_peg") return;
             chainSortMetric = metric;
             updateChainMetricButtons();
-            if (hierarchyViewMode === "chain" && fullRootNode) refreshChainMetricDisplay();
-        }
-
-        function chainMetricDatasetKey(metric) {
-            if (metric === "logical_shared_clone") return "logicalSharedClone";
-            if (metric === "physical_peg") return "physicalPeg";
-            return "logicalLive";
+            if (hierarchyViewMode === "chain" && fullRootNode) applySearchAndRender();
         }
 
         function updateChainMetricButtons() {
@@ -2799,60 +2912,13 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             });
         }
 
-        function refreshChainMetricDisplay() {
-            const container = document.getElementById("hierarchy-tree-container");
-            if (!container) return;
-            const key = chainMetricDatasetKey(chainSortMetric);
-            container.querySelectorAll(".tree-children").forEach(childrenEl => {
-                const wrappers = Array.from(childrenEl.children);
-                const chainWrappers = [];
-                const others = [];
-                wrappers.forEach(wrapper => {
-                    const row = wrapper.querySelector(":scope > .tree-row");
-                    if (row && row.dataset.chainRow === "1") chainWrappers.push(wrapper);
-                    else others.push(wrapper);
-                });
-                if (!chainWrappers.length) return;
-                chainWrappers.sort((a, b) => {
-                    const aRow = a.querySelector(":scope > .tree-row");
-                    const bRow = b.querySelector(":scope > .tree-row");
-                    const av = Number(aRow.dataset[key] || 0);
-                    const bv = Number(bRow.dataset[key] || 0);
-                    if (bv !== av) return bv - av;
-                    const aName = aRow.querySelector(".name") ? aRow.querySelector(".name").textContent : "";
-                    const bName = bRow.querySelector(".name") ? bRow.querySelector(".name").textContent : "";
-                    return String(aName).localeCompare(String(bName));
-                });
-                chainWrappers.forEach(wrapper => {
-                    const row = wrapper.querySelector(":scope > .tree-row");
-                    const bytes = Number(row.dataset[key] || 0);
-                    const sizeEl = row.querySelector(".size");
-                    if (sizeEl) sizeEl.textContent = formatBytes(bytes);
-                    childrenEl.appendChild(wrapper);
-                });
-                others.forEach(wrapper => childrenEl.appendChild(wrapper));
-            });
-            container.querySelectorAll("[data-unmapped-folder='1']").forEach(row => {
-                const wrapper = row.parentElement;
-                const childrenEl = wrapper && wrapper.querySelector(":scope > .tree-children");
-                if (!childrenEl) return;
-                let sum = 0;
-                childrenEl.querySelectorAll(":scope > .tree-node-wrapper > .tree-row[data-chain-row='1']").forEach(chainRow => {
-                    sum += Number(chainRow.dataset[key] || 0);
-                });
-                const sizeEl = row.querySelector(".size");
-                if (sizeEl) sizeEl.textContent = formatBytes(sum);
-            });
-        }
-
         function updateHierarchyModeControls() {
-            const heading = document.getElementById("hierarchy-mode-toggle");
+            const heading = document.getElementById("hierarchy-mode-title");
+            const toggle = document.getElementById("hierarchy-mode-toggle");
             const sortRow = document.getElementById("chain-sort-row");
             const isChain = hierarchyViewMode === "chain";
-            if (heading) {
-                heading.textContent = isChain ? "Chain Hierarchy" : "Storage Hierarchy";
-                heading.title = isChain ? "Click to switch to disk view" : "Click to switch to chain view";
-            }
+            if (heading) heading.textContent = isChain ? "Chain Hierarchy" : "Storage Hierarchy";
+            if (toggle) toggle.title = isChain ? "Switch to storage hierarchy" : "Switch to chain hierarchy";
             if (sortRow) sortRow.classList.toggle("hidden", !isChain);
             updateChainMetricButtons();
         }
@@ -3096,26 +3162,6 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             return d3.hierarchy(buildChainHierarchyData(fullRootNode.data));
         }
 
-        function renderHierarchyTree(rootD3Node, isFiltering = false) {
-            const container = document.getElementById("hierarchy-tree-container");
-            container.innerHTML = "";
-            nodeTreeRowMap.clear();
-
-            const treeDOM = createTreeNodeDOM(rootD3Node, isFiltering);
-            if (treeDOM) container.appendChild(treeDOM);
-
-            const restoreChain = hierarchyViewMode === "chain" && savedChainExpandKeys;
-            if (restoreChain) {
-                restoreChainExpandState(container);
-                if (!isFiltering) return;
-            }
-
-            if (!isFiltering) {
-                const usedSpaceNode = findNodeByName(rootD3Node, rootD3Node.data.children ? rootD3Node.data.children[0].name : "");
-                if (usedSpaceNode) syncTreeHighlight(usedSpaceNode);
-            }
-        }
-
         function getNodeIcon(d3Node) {
             if (d3Node.data.is_free) return "🟩";
             if (d3Node.depth === 0) return "🕋";
@@ -3143,160 +3189,300 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             return baseName;
         }
 
-        function createTreeNodeDOM(d3Node, isFiltering) {
-            if (isFiltering && !d3Node.isEffectiveSearchMatch) return null;
+        function getVisibleChildNodes(d3Node, isFiltering) {
+            let children = Array.isArray(d3Node.children) ? d3Node.children.slice() : [];
+            if (isFiltering) children = children.filter(child => child.isEffectiveSearchMatch);
+            if (hierarchyViewMode !== "chain" || !children.length) return children;
 
-            const wrapper = document.createElement("div");
-            wrapper.className = "tree-node-wrapper select-none";
-            wrapper.dataset.expandKey = hierarchyExpandKey(d3Node);
+            const chainKids = [];
+            const others = [];
+            children.forEach(child => {
+                if (child.data && child.data.is_chain_hierarchy_node) chainKids.push(child);
+                else others.push(child);
+            });
+            if (!chainKids.length) return children;
 
-            const hasChildren = d3Node.children && d3Node.children.length > 0;
-            const realSum = getRealNodeSum(d3Node);
-            const displaySize = formatBytes(realSum);
-            const icon = getNodeIcon(d3Node);
+            chainKids.sort((a, b) => {
+                const av = chainMetricBytes((a.data && a.data.chain_stats) || {});
+                const bv = chainMetricBytes((b.data && b.data.chain_stats) || {});
+                if (bv !== av) return bv - av;
+                return String((a.data && a.data.name) || "").localeCompare(String((b.data && b.data.name) || ""));
+            });
+            return chainKids.concat(others);
+        }
+
+        function flattenVisibleTree(d3Node, expandedKeys, isFiltering, depth = 0, out = []) {
+            if (!d3Node) return out;
+            if (isFiltering && !d3Node.isEffectiveSearchMatch) return out;
+
+            const expandKey = hierarchyExpandKey(d3Node);
+            d3Node.treeExpandKey = expandKey;
+            d3Node.treeRowId = expandKey;
+            nodeTreeRowMap.set(d3Node.data.name, d3Node);
+
+            const children = getVisibleChildNodes(d3Node, isFiltering);
+            const hasChildren = children.length > 0;
+            const forceExpanded = isFiltering && (d3Node.hasMatchingDescendant || d3Node.isSearchMatch);
+            const isExpanded = hasChildren && (forceExpanded || expandedKeys.has(expandKey));
+
+            let displaySize;
+            if (d3Node.data.is_chain_hierarchy_node || d3Node.data.is_unmapped_chain_folder) {
+                displaySize = d3Node.data.formatted_size || formatBytes(getRealNodeSum(d3Node));
+            } else {
+                displaySize = formatBytes(getRealNodeSum(d3Node));
+            }
+
+            out.push({
+                d3Node,
+                expandKey,
+                depth,
+                hasChildren,
+                isExpanded,
+                icon: getNodeIcon(d3Node),
+                name: getDisplayNodeName(d3Node.data),
+                size: displaySize,
+            });
+
+            if (isExpanded) {
+                children.forEach(child => flattenVisibleTree(child, expandedKeys, isFiltering, depth + 1, out));
+            }
+            return out;
+        }
+
+        function ensureVirtualTreeShell(container) {
+            let inner = document.getElementById("hierarchy-tree-inner");
+            if (!inner || inner.parentElement !== container) {
+                container.innerHTML = "";
+                container.classList.add("virtual-tree");
+                inner = document.createElement("div");
+                inner.id = "hierarchy-tree-inner";
+                container.appendChild(inner);
+                container.onscroll = () => paintVirtualTree();
+            }
+            return inner;
+        }
+
+        function rebuildVirtualFlatRows() {
+            nodeTreeRowMap.clear();
+            virtualFlatRows = virtualTreeRoot
+                ? flattenVisibleTree(virtualTreeRoot, treeExpandedKeys, virtualTreeFiltering)
+                : [];
+        }
+
+        function expandAncestorKeys(d3Node) {
+            let curr = d3Node ? d3Node.parent : null;
+            while (curr) {
+                treeExpandedKeys.add(hierarchyExpandKey(curr));
+                curr = curr.parent;
+            }
+        }
+
+        function scrollVirtualTreeToKey(expandKey, smooth = true) {
+            if (!expandKey) return;
+            const index = virtualFlatRows.findIndex(row => row.expandKey === expandKey);
+            if (index < 0) return;
+            const container = document.getElementById("hierarchy-tree-container");
+            if (!container) return;
+            const rowTop = index * TREE_ROW_HEIGHT;
+            const rowBottom = rowTop + TREE_ROW_HEIGHT;
+            const viewTop = container.scrollTop;
+            const viewBottom = viewTop + container.clientHeight;
+            if (rowTop < viewTop) {
+                container.scrollTo({ top: rowTop, behavior: smooth ? "smooth" : "auto" });
+            } else if (rowBottom > viewBottom) {
+                container.scrollTo({ top: rowBottom - container.clientHeight, behavior: smooth ? "smooth" : "auto" });
+            }
+        }
+
+        function isVirtualTreeRowSelected(row) {
+            if (!selectedTreeExpandKey || !row || row.expandKey !== selectedTreeExpandKey) return false;
+            // Guard against key collisions: require exact entity match when signature is specific.
+            const data = row.d3Node && row.d3Node.data;
+            const sig = selectedNodeSignature;
+            if (!sig || !data) return true;
+            if (sig.type === "vdisk") {
+                return data.vdisk_id !== undefined && data.vdisk_id !== null && String(data.vdisk_id) === sig.id;
+            }
+            if (sig.type === "chain_snap_share") {
+                return !!data.is_chain_snap_share_block && String(data.chain_id || "") === String(sig.chainId || "");
+            }
+            if (sig.type === "shared_block") {
+                return !!data.is_shared_clone_block && String(data.chain_id || "") === String(sig.chainId || "");
+            }
+            if (sig.type === "shared_parent") {
+                if (!data.is_shared_parent_vdisk) return false;
+                if (sig.lineageId) return resolveNodeLineageId(data) === sig.lineageId;
+                return String(data.chain_id || "") === String(sig.chainId || "");
+            }
+            if (sig.type === "chain_hierarchy") {
+                return !!data.is_chain_hierarchy_node && String(data.chain_id || "") === String(sig.chainId || "");
+            }
+            return true;
+        }
+
+        function createVirtualTreeRowElement(row, index) {
+            const d3Node = row.d3Node;
+            const el = document.createElement("div");
+            const isSelected = isVirtualTreeRowSelected(row);
+            const highlightClass = isSelected
+                ? "bg-sky-600/30 border-sky-500 text-sky-300 font-bold"
+                : "hover:bg-slate-700/60 text-slate-300 border-transparent";
+
+            el.className = `tree-row flex items-center px-1.5 text-xs rounded cursor-pointer group transition-colors border select-none ${highlightClass}`;
+            el.style.transform = `translateY(${index * TREE_ROW_HEIGHT}px)`;
+            el.style.paddingLeft = `${row.depth * 14 + 8}px`;
+            el.dataset.expandKey = row.expandKey;
+            if (d3Node.data.is_chain_hierarchy_node) {
+                el.dataset.chainRow = "1";
+                el.dataset.chainId = String(d3Node.data.chain_id || "");
+            }
+            if (d3Node.data.is_unmapped_chain_folder) el.dataset.unmappedFolder = "1";
+
             const chainTitle = d3Node.data.is_chain_hierarchy_node
                 ? ` title="${escapeHtml(d3Node.data.chain_id || d3Node.data.name || "")}"`
                 : "";
 
-            const row = document.createElement("div");
-            row.className = "tree-row flex items-center px-1.5 py-1 text-xs hover:bg-slate-700/60 rounded cursor-pointer group transition-colors my-0.5 border border-transparent";
-            
-            const rowId = `tree-row-${Math.random().toString(36).substr(2, 9)}`;
-            row.id = rowId;
-            d3Node.treeRowId = rowId;
-            nodeTreeRowMap.set(d3Node.data.name, d3Node);
-
-            row.innerHTML = `
-                <button class="caret-btn w-4 h-4 flex items-center justify-center mr-1 text-slate-400 hover:text-white transition-transform flex-shrink-0 ${hasChildren ? '' : 'invisible'}">
-                    <svg class="w-3 h-3 transform transition-transform duration-150 caret-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            el.innerHTML = `
+                <button type="button" class="caret-btn w-4 h-4 flex items-center justify-center mr-1 text-slate-400 hover:text-white transition-transform flex-shrink-0 ${row.hasChildren ? "" : "invisible"}">
+                    <svg class="w-3 h-3 transform transition-transform duration-150 caret-icon ${row.isExpanded ? "rotate-90" : ""}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
                     </svg>
                 </button>
-                <span class="mr-1.5 text-sm flex-shrink-0">${icon}</span>
-                <span class="name flex-1 truncate text-slate-300 group-hover:text-sky-300 font-medium"${chainTitle}>${getDisplayNodeName(d3Node.data)}</span>
-                <span class="size text-[10px] font-mono text-slate-400 ml-1 flex-shrink-0">${displaySize}</span>
+                <span class="mr-1.5 text-sm flex-shrink-0">${row.icon}</span>
+                <span class="name flex-1 truncate group-hover:text-sky-300 font-medium"${chainTitle}>${escapeHtml(row.name)}</span>
+                <span class="size text-[10px] font-mono text-slate-400 ml-1 flex-shrink-0">${escapeHtml(row.size)}</span>
             `;
-            if (d3Node.data.is_chain_hierarchy_node) {
-                const stats = d3Node.data.chain_stats || {};
-                row.dataset.chainRow = "1";
-                row.dataset.logicalLive = String(Number(stats.logical_live || 0));
-                row.dataset.logicalSharedClone = String(Number(stats.logical_shared_clone || 0));
-                row.dataset.physicalPeg = String(Number(stats.physical_peg || 0));
-                row.dataset.chainId = String(d3Node.data.chain_id || "");
-            }
-            if (d3Node.data.is_unmapped_chain_folder) row.dataset.unmappedFolder = "1";
 
-            wrapper.appendChild(row);
-
-            if (hasChildren) {
-                const childrenContainer = document.createElement("div");
-                childrenContainer.className = "tree-children hidden pl-3 ml-2 border-l border-slate-700/60 space-y-0.5";
-                
-                d3Node.children.forEach(childD3Node => {
-                    const childDOM = createTreeNodeDOM(childD3Node, isFiltering);
-                    if (childDOM) childrenContainer.appendChild(childDOM);
-                });
-
-                wrapper.appendChild(childrenContainer);
-
-                const caretBtn = row.querySelector(".caret-btn");
+            const caretBtn = el.querySelector(".caret-btn");
+            if (row.hasChildren && caretBtn) {
                 caretBtn.onclick = (e) => {
                     e.stopPropagation();
-                    toggleTreeNodeExpand(wrapper, childrenContainer, caretBtn);
+                    toggleTreeExpandKey(row.expandKey);
                 };
-
-                if (isFiltering && (d3Node.hasMatchingDescendant || d3Node.isSearchMatch)) {
-                    childrenContainer.classList.remove("hidden");
-                    const caretIcon = row.querySelector(".caret-icon");
-                    if (caretIcon) caretIcon.classList.add("rotate-90");
-                }
             }
 
-            row.onclick = (e) => {
+            el.onclick = (e) => {
                 e.stopPropagation();
-                
-                if (hasChildren) {
-                    const childrenContainer = wrapper.querySelector(".tree-children");
-                    const caretBtn = row.querySelector(".caret-btn");
-                    if (childrenContainer && childrenContainer.classList.contains("hidden")) {
-                        toggleTreeNodeExpand(wrapper, childrenContainer, caretBtn, true);
-                    }
-                }
-
-                if (hasChildren && d3Node.depth > 0) {
-                    zoomToNode(d3Node, null, true, false);
-                } else if (d3Node.depth === 0) {
-                    zoomToNode(d3Node, null, true, false);
-                } else {
+                if (row.hasChildren && !row.isExpanded) toggleTreeExpandKey(row.expandKey, true);
+                if (d3Node.data.is_chain_hierarchy_node) {
                     inspectNode(d3Node);
-                    syncTreeHighlight(d3Node);
+                    highlightChainHierarchyRow(d3Node.data.chain_id || d3Node.data.name);
+                    return;
                 }
+                inspectNode(d3Node);
+                syncTreeHighlight(d3Node);
             };
 
-            return wrapper;
+            return el;
         }
 
-        function toggleTreeNodeExpand(wrapper, childrenContainer, caretBtn, forceExpand = false) {
-            if (!childrenContainer || !caretBtn) return;
-            const caretIcon = caretBtn.querySelector(".caret-icon");
-            const isHidden = childrenContainer.classList.contains("hidden");
+        function paintVirtualTree() {
+            const container = document.getElementById("hierarchy-tree-container");
+            if (!container) return;
+            const inner = ensureVirtualTreeShell(container);
+            const total = virtualFlatRows.length;
+            inner.style.height = `${Math.max(total, 1) * TREE_ROW_HEIGHT}px`;
 
-            if (isHidden || forceExpand) {
-                childrenContainer.classList.remove("hidden");
-                if (caretIcon) caretIcon.classList.add("rotate-90");
-            } else {
-                childrenContainer.classList.add("hidden");
-                if (caretIcon) caretIcon.classList.remove("rotate-90");
+            if (!total) {
+                inner.innerHTML = `<p class="text-xs text-slate-500 italic text-center p-2">No matching entities.</p>`;
+                return;
             }
+
+            const scrollTop = container.scrollTop;
+            const viewportHeight = container.clientHeight || TREE_ROW_HEIGHT * 20;
+            const startIndex = Math.max(0, Math.floor(scrollTop / TREE_ROW_HEIGHT) - TREE_OVERSCAN);
+            const endIndex = Math.min(total - 1, Math.ceil((scrollTop + viewportHeight) / TREE_ROW_HEIGHT) + TREE_OVERSCAN);
+
+            const frag = document.createDocumentFragment();
+            for (let i = startIndex; i <= endIndex; i++) {
+                frag.appendChild(createVirtualTreeRowElement(virtualFlatRows[i], i));
+            }
+            inner.innerHTML = "";
+            inner.appendChild(frag);
+        }
+
+        function toggleTreeExpandKey(expandKey, forceExpand = false) {
+            if (!expandKey) return;
+            const isOpen = treeExpandedKeys.has(expandKey);
+            if (forceExpand || !isOpen) treeExpandedKeys.add(expandKey);
+            else treeExpandedKeys.delete(expandKey);
+            rebuildVirtualFlatRows();
+            paintVirtualTree();
+        }
+
+        function renderHierarchyTree(rootD3Node, isFiltering = false) {
+            const container = document.getElementById("hierarchy-tree-container");
+            if (!container) return;
+
+            virtualTreeRoot = rootD3Node;
+            virtualTreeFiltering = isFiltering;
+            ensureVirtualTreeShell(container);
+            rebuildVirtualFlatRows();
+
+            if (pendingChainScrollRestore !== null && pendingChainScrollRestore !== undefined) {
+                container.scrollTop = pendingChainScrollRestore;
+                pendingChainScrollRestore = null;
+                paintVirtualTree();
+                if (!isFiltering) return;
+            }
+
+            if (!isFiltering) {
+                const usedSpaceNode = findNodeByName(rootD3Node, rootD3Node.data.children ? rootD3Node.data.children[0].name : "");
+                if (usedSpaceNode) syncTreeHighlight(usedSpaceNode);
+                else paintVirtualTree();
+            } else {
+                paintVirtualTree();
+            }
+        }
+
+        function resolveSidebarTreeNode(targetNode) {
+            if (!targetNode || !targetNode.data) return null;
+            const root = virtualTreeRoot || fullRootNode;
+            if (!root) return targetNode;
+            if (root === fullRootNode || (hierarchyViewMode !== "chain" && isDiskTreemapNode(targetNode))) {
+                let exact = null;
+                root.each(n => {
+                    if (!exact && n === targetNode) exact = n;
+                });
+                if (exact) return exact;
+            }
+            let matched = null;
+            root.each(n => {
+                if (!matched && dataMatchesDiskNode(n.data, targetNode.data)) matched = n;
+            });
+            if (matched) return matched;
+
+            // Chain view collapses vdisks into chain rows — locate the owning chain node.
+            if (hierarchyViewMode === "chain") {
+                const cid = String((targetNode.data && targetNode.data.chain_id) || "").trim();
+                if (cid) {
+                    root.each(n => {
+                        if (matched || !n.data || !n.data.is_chain_hierarchy_node) return;
+                        if (String(n.data.chain_id || "") === cid) matched = n;
+                    });
+                    if (matched) return matched;
+                }
+            }
+
+            if (targetNode.data.name) {
+                matched = findNodeByName(root, targetNode.data.name);
+                if (matched) return matched;
+            }
+            return targetNode;
         }
 
         function syncTreeHighlight(targetNode) {
-            document.querySelectorAll(".tree-row").forEach(el => {
-                el.classList.remove("bg-sky-600/30", "border-sky-500", "text-sky-300", "font-bold", "bg-amber-500/20", "border-amber-400", "text-amber-300");
-            });
-
-            if (targetNode && targetNode.treeRowId) {
-                const activeRow = document.getElementById(targetNode.treeRowId);
-                if (activeRow) activeRow.classList.add("bg-sky-600/30", "border-sky-500", "text-sky-300", "font-bold");
+            const sidebarNode = resolveSidebarTreeNode(targetNode);
+            if (sidebarNode) {
+                selectedTreeExpandKey = hierarchyExpandKey(sidebarNode);
+                expandAncestorKeys(sidebarNode);
+            } else {
+                selectedTreeExpandKey = null;
             }
 
-            if (fullRootNode && (activeChainVDiskIds.size > 0 || activeChainId || activeLineageId)) {
-                fullRootNode.each(n => {
-                    const isLineageMember = isActiveLineageHighlight(n.data);
-                    const isChainBlockRoot = n.data.is_shared_clone_block && activeChainId && String(n.data.chain_id) === String(activeChainId);
-                    const isChainBlockMember = n.data.is_shared_clone_block && n.data.member_chain_ids && activeChainId && n.data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
-                    const isChainBlockActiveMember = n.data.is_shared_clone_block && n.data.chain_id && activeMemberChainIds.has(String(n.data.chain_id));
-                    const isSnapShareBlock = n.data.is_chain_snap_share_block && activeChainId && String(n.data.chain_id) === String(activeChainId);
-
-                    if ((isLineageMember || isChainBlockRoot || isChainBlockMember || isChainBlockActiveMember || isSnapShareBlock) && n.treeRowId) {
-                        const row = document.getElementById(n.treeRowId);
-                        if (row) {
-                            row.classList.add("bg-amber-500/20", "border-amber-400", "text-amber-300");
-
-                            let curr = n.parent;
-                            while (curr) {
-                                if (curr.treeRowId) {
-                                    const parentRow = document.getElementById(curr.treeRowId);
-                                    if (parentRow) {
-                                        const parentWrapper = parentRow.parentElement;
-                                        const childrenContainer = parentWrapper.querySelector(".tree-children");
-                                        const caretBtn = parentRow.querySelector(".caret-btn");
-                                        if (childrenContainer && caretBtn) {
-                                            toggleTreeNodeExpand(parentWrapper, childrenContainer, caretBtn, true);
-                                        }
-                                    }
-                                }
-                                curr = curr.parent;
-                            }
-                        }
-                    }
-                });
-            }
-
-            if (targetNode && targetNode.treeRowId) {
-                const activeRow = document.getElementById(targetNode.treeRowId);
-                if (activeRow) activeRow.scrollIntoView({ block: "nearest", behavior: "smooth" });
-            }
+            rebuildVirtualFlatRows();
+            paintVirtualTree();
+            if (selectedTreeExpandKey) scrollVirtualTreeToKey(selectedTreeExpandKey, true);
         }
 
         document.getElementById("canvas-wrapper").addEventListener("contextmenu", function(e) {
@@ -3323,8 +3509,8 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             currentHierarchyNode = targetNode;
             updateBreadcrumbs(targetNode);
-            syncTreeHighlight(targetNode);
             inspectNode(targetNode);
+            syncTreeHighlight(targetNode);
 
             if (!animate || !firstRect) {
                 renderSpaceSnifferView(targetNode);
@@ -3468,6 +3654,95 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             return 0;
         }
 
+        function isDiskTreemapNode(node) {
+            if (!node || !fullRootNode) return false;
+            let curr = node;
+            while (curr.parent) curr = curr.parent;
+            return curr === fullRootNode;
+        }
+
+        function isSelectableTreemapEntity(data) {
+            if (!data) return false;
+            if (data.is_shared_clone_block || data.is_shared_parent_vdisk || data.is_chain_snap_share_block) return true;
+            if (data.is_partial_extents_block || data.is_total_garbage_block || data.is_explicit_reserve_block) return true;
+            if (data.is_chain_hierarchy_node) return true;
+            if (data.vdisk_id !== undefined && data.vdisk_id !== null && String(data.vdisk_id).trim() !== "") return true;
+            return false;
+        }
+
+        function dataMatchesDiskNode(nData, data) {
+            if (!nData || !data) return false;
+            if (nData === data) return true;
+
+            if (data.vdisk_id !== undefined && data.vdisk_id !== null && String(data.vdisk_id).trim() !== ""
+                && nData.vdisk_id !== undefined && nData.vdisk_id !== null
+                && String(nData.vdisk_id) === String(data.vdisk_id)
+                && !nData.is_shared_parent_vdisk && !nData.is_shared_clone_block) {
+                return true;
+            }
+
+            if (data.is_chain_snap_share_block && nData.is_chain_snap_share_block
+                && String(nData.chain_id || "") === String(data.chain_id || "")) {
+                return true;
+            }
+
+            if (data.is_shared_clone_block && nData.is_shared_clone_block
+                && String(nData.chain_id || "") === String(data.chain_id || "")) {
+                return true;
+            }
+
+            if (data.is_shared_parent_vdisk && nData.is_shared_parent_vdisk) {
+                const a = resolveNodeLineageId(data);
+                const b = resolveNodeLineageId(nData);
+                if (a && b && a === b) return true;
+                if (String(nData.chain_id || "") && String(nData.chain_id || "") === String(data.chain_id || "")) return true;
+            }
+
+            if (data.is_chain_hierarchy_node && nData.is_chain_hierarchy_node
+                && String(nData.chain_id || "") === String(data.chain_id || "")) {
+                return true;
+            }
+
+            return false;
+        }
+
+        function findDiskNodeByData(data) {
+            if (!fullRootNode || !data) return null;
+            let found = null;
+            fullRootNode.each(n => {
+                if (!found && dataMatchesDiskNode(n.data, data)) found = n;
+            });
+            if (found) return found;
+
+            const searchRoot = currentHierarchyNode || fullRootNode;
+            if (data.name) found = findNodeByName(searchRoot, data.name);
+            return found;
+        }
+
+        function restoreDiskTreemapFocus() {
+            if (!fullRootNode) return;
+            const usedName = fullRootNode.data.children && fullRootNode.data.children[0]
+                ? fullRootNode.data.children[0].name
+                : "";
+            const usedSpaceNode = usedName ? findNodeByName(fullRootNode, usedName) : null;
+            currentHierarchyNode = usedSpaceNode || fullRootNode;
+            updateBreadcrumbs(currentHierarchyNode);
+        }
+
+        function hitTestTreemap(x, y) {
+            for (let i = currentDrawnNodes.length - 1; i >= 0; i--) {
+                const n = currentDrawnNodes[i];
+                if (x >= n.x0 && x <= n.x1 && y >= n.y0 && y <= n.y1) return n;
+            }
+            return null;
+        }
+
+        function isTreemapTitleHit(node, x, y) {
+            if (!node || !node.children || !node.children.length || node.depth === 0) return false;
+            const titleBottom = node.y0 + getTreemapLayoutMetrics().titleBarHeight;
+            return x >= node.x0 && x <= node.x1 && y >= node.y0 && y <= titleBottom;
+        }
+
         function onCanvasMouseMove(event) {
             const canvas = document.getElementById("treemap-canvas");
             if (!canvas) return;
@@ -3475,19 +3750,12 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             
             const x = event.clientX - rect.left;
             const y = event.clientY - rect.top;
-            
-            let found = null;
-            for (let i = currentDrawnNodes.length - 1; i >= 0; i--) {
-                const n = currentDrawnNodes[i];
-                if (x >= n.x0 && x <= n.x1 && y >= n.y0 && y <= n.y1) {
-                    found = n;
-                    break;
-                }
-            }
+            const found = hitTestTreemap(x, y);
 
             if (found) {
-                if (found.children && found.depth > 0) canvas.style.cursor = "zoom-in";
-                else canvas.style.cursor = "pointer";
+                const canZoom = found.children && found.children.length > 0 && found.depth > 0
+                    && (isTreemapTitleHit(found, x, y) || !isSelectableTreemapEntity(found.data));
+                canvas.style.cursor = canZoom ? "zoom-in" : "pointer";
             } else canvas.style.cursor = "default";
 
             if (found && (found.data.vdisk_id || found.data.is_shared_clone_block || found.data.is_shared_parent_vdisk || found.data.is_chain_snap_share_block || found.data.is_partial_extents_block || found.data.is_total_garbage_block || found.data.is_explicit_reserve_block)) {
@@ -3519,26 +3787,28 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const rect = canvas.getBoundingClientRect();
             const x = event.clientX - rect.left;
             const y = event.clientY - rect.top;
-            
-            let found = null;
-            for (let i = currentDrawnNodes.length - 1; i >= 0; i--) {
-                const n = currentDrawnNodes[i];
-                if (x >= n.x0 && x <= n.x1 && y >= n.y0 && y <= n.y1) {
-                    found = n;
-                    break;
-                }
+            const found = hitTestTreemap(x, y);
+
+            if (!found) return;
+            hideFloatingTooltip();
+
+            const diskNode = findDiskNodeByData(found.data);
+            const hasChildren = !!(found.children && found.children.length > 0);
+            const isFolderGroup = hasChildren && found.depth > 0 && !isSelectableTreemapEntity(found.data);
+            const titleHit = isTreemapTitleHit(found, x, y);
+
+            // Parent/group tiles zoom (title or body). Selectable entities inspect + locate.
+            if ((titleHit && hasChildren && found.depth > 0) || isFolderGroup) {
+                if (diskNode) zoomToNode(diskNode, null, true, false);
+                return;
             }
 
-            if (found) {
-                hideFloatingTooltip();
-                const targetNode = findNodeByName(currentHierarchyNode, found.data.name);
-
-                if (found.children && found.depth > 0) {
-                    if (targetNode) zoomToNode(targetNode, null, true, false); 
-                } else {
-                    inspectNode(found);
-                    if (targetNode) syncTreeHighlight(targetNode);
-                }
+            const targetNode = diskNode || found;
+            inspectNode(targetNode);
+            if (diskNode) {
+                syncTreeHighlight(diskNode);
+            } else if (found.data && found.data.is_chain_hierarchy_node) {
+                highlightChainHierarchyRow(found.data.chain_id || found.data.name);
             }
         }
 
@@ -3646,14 +3916,27 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 const h = Math.max(0, d.y1 - d.y0);
                 if (w <= 0 || h <= 0) return;
 
-                const isExactChainLeaf = isActiveLineageHighlight(d.data) && !!d.data.vdisk_id;
+                const isExactChainLeaf = isActiveLineageHighlight(d.data) && !!d.data.vdisk_id
+                    && !d.data.is_shared_parent_vdisk && !d.data.is_shared_clone_block;
                 const isExactChainBlockRoot = d.data.is_shared_clone_block && activeChainId && String(d.data.chain_id) === String(activeChainId);
                 const isExactChainBlockMember = d.data.is_shared_clone_block && d.data.member_chain_ids && activeChainId && d.data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
                 const isExactChainBlockActiveMember = d.data.is_shared_clone_block && d.data.chain_id && activeMemberChainIds.has(String(d.data.chain_id));
-                const isExactSnapShareBlock = d.data.is_chain_snap_share_block && activeChainId && String(d.data.chain_id) === String(activeChainId);
+                const isExactSnapShareBlock = d.data.is_chain_snap_share_block && (
+                    (activeChainId && String(d.data.chain_id) === String(activeChainId))
+                    || isActiveLineageHighlight(d.data)
+                );
                 const isExactSharedParentBlock = d.data.is_shared_parent_vdisk && isActiveLineageHighlight(d.data);
+                const isChainHierarchyFamily = selectedNodeSignature && selectedNodeSignature.type === "chain_hierarchy" && (
+                    (d.data.vdisk_id !== undefined && d.data.vdisk_id !== null && activeChainVDiskIds.has(String(d.data.vdisk_id)))
+                    || (d.data.is_chain_snap_share_block && String(d.data.chain_id || "") === String(selectedNodeSignature.chainId || ""))
+                    || (d.data.is_shared_clone_block && (
+                        String(d.data.chain_id || "") === String(selectedNodeSignature.chainId || "")
+                        || (d.data.member_chain_ids && d.data.member_chain_ids.some(cid => String(cid) === String(selectedNodeSignature.chainId || "")))
+                    ))
+                    || (d.data.is_shared_parent_vdisk && isActiveLineageHighlight(d.data))
+                );
 
-                const isHighlight = isExactChainLeaf || isExactChainBlockRoot || isExactChainBlockMember || isExactChainBlockActiveMember || isExactSnapShareBlock || isExactSharedParentBlock;
+                const isHighlight = isExactChainLeaf || isExactChainBlockRoot || isExactChainBlockMember || isExactChainBlockActiveMember || isExactSnapShareBlock || isExactSharedParentBlock || isChainHierarchyFamily;
                 const containsChainVDisk = !isHighlight && nodeContainsChainVDisk(d);
                 const isPrimarySelected = (() => {
                     if (!selectedNodeSignature || !d || !d.data) return false;
@@ -3665,7 +3948,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                         if (sig.lineageId) return !!d.data.is_shared_parent_vdisk && resolveNodeLineageId(d.data) === sig.lineageId;
                         return !!d.data.is_shared_parent_vdisk && String(d.data.chain_id || "") === sig.chainId;
                     }
-                    if (sig.type === "group") return !d.data.vdisk_id && !d.data.is_shared_clone_block && !d.data.is_shared_parent_vdisk && !d.data.is_chain_snap_share_block && String(d.data.name || "") === sig.name;
+                    // Chain-hierarchy and folder/group navigation use amber/no primary (avoid parent-wide cyan boxes).
                     return false;
                 })();
 
@@ -3697,6 +3980,10 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 } else if (isHighlight) {
                     ctx.fillStyle = "rgba(251, 191, 36, 0.10)";
                     ctx.fillRect(d.x0, d.y0, w, h);
+                    ctx.lineWidth = 1.5;
+                    ctx.strokeStyle = "#fbbf24";
+                    ctx.strokeRect(d.x0 + 0.5, d.y0 + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
+                } else if (containsChainVDisk && selectedNodeSignature && selectedNodeSignature.type === "chain_hierarchy") {
                     ctx.lineWidth = 1.5;
                     ctx.strokeStyle = "#fbbf24";
                     ctx.strokeRect(d.x0 + 0.5, d.y0 + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
@@ -4273,9 +4560,6 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             if (targetNode) {
                 applyActiveLineageFromNodeData(targetNode.data);
-
-                const parentZoomTarget = targetNode.parent || fullRootNode;
-                zoomToNode(parentZoomTarget, null, true, false);
                 inspectNode(targetNode);
                 syncTreeHighlight(targetNode);
             }
@@ -4303,9 +4587,6 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (!targetNode) return;
 
             applyActiveLineageFromNodeData(targetNode.data);
-
-            const parentZoomTarget = targetNode.parent || fullRootNode;
-            zoomToNode(parentZoomTarget, null, true, false);
             inspectNode(targetNode);
             syncTreeHighlight(targetNode);
         }
@@ -4332,32 +4613,22 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         function highlightChainHierarchyRow(chainId) {
             if (hierarchyViewMode !== "chain") return;
             const cid = String(chainId || "");
-            document.querySelectorAll("#hierarchy-tree-container .tree-row").forEach(el => {
-                el.classList.remove("bg-sky-600/30", "border-sky-500", "text-sky-300", "font-bold");
-            });
-            const matches = [];
-            document.querySelectorAll("#hierarchy-tree-container .tree-row[data-chain-id]").forEach(row => {
-                if (row.dataset.chainId === cid) matches.push(row);
-            });
-            matches.forEach(row => {
-                row.classList.add("bg-sky-600/30", "border-sky-500", "text-sky-300", "font-bold");
-                let wrapper = row.parentElement;
-                while (wrapper && wrapper.id !== "hierarchy-tree-container") {
-                    if (wrapper.classList && wrapper.classList.contains("tree-node-wrapper")) {
-                        const parentChildren = wrapper.parentElement;
-                        if (parentChildren && parentChildren.classList.contains("tree-children")) {
-                            parentChildren.classList.remove("hidden");
-                            const parentRow = parentChildren.parentElement
-                                ? parentChildren.parentElement.querySelector(":scope > .tree-row")
-                                : null;
-                            const caret = parentRow ? parentRow.querySelector(".caret-icon") : null;
-                            if (caret) caret.classList.add("rotate-90");
-                        }
-                    }
-                    wrapper = wrapper.parentElement;
-                }
-            });
-            if (matches[0]) matches[0].scrollIntoView({ block: "nearest", behavior: "smooth" });
+            let matchNode = null;
+            const root = virtualTreeRoot || fullRootNode;
+            if (root) {
+                root.each(n => {
+                    if (matchNode || !n.data || !n.data.is_chain_hierarchy_node) return;
+                    if (String(n.data.chain_id || "") !== cid) return;
+                    matchNode = n;
+                });
+            }
+            if (matchNode) {
+                syncTreeHighlight(matchNode);
+                return;
+            }
+            selectedTreeExpandKey = null;
+            rebuildVirtualFlatRows();
+            paintVirtualTree();
         }
 
         function selectChainById(chainId) {
@@ -4401,8 +4672,6 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const info = d.data;
             if (info.is_chain_hierarchy_node) {
                 selectedNodeSignature = { type: "chain_hierarchy", chainId: String(info.chain_id || "") };
-            } else if (info.vdisk_id !== undefined && info.vdisk_id !== null) {
-                selectedNodeSignature = { type: "vdisk", id: String(info.vdisk_id) };
             } else if (info.is_shared_clone_block) {
                 selectedNodeSignature = { type: "shared_block", chainId: String(info.chain_id || "") };
             } else if (info.is_chain_snap_share_block) {
@@ -4413,6 +4682,8 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     lineageId: resolveNodeLineageId(info),
                     chainId: String(info.chain_id || ""),
                 };
+            } else if (info.vdisk_id !== undefined && info.vdisk_id !== null) {
+                selectedNodeSignature = { type: "vdisk", id: String(info.vdisk_id) };
             } else {
                 selectedNodeSignature = { type: "group", name: String(info.name || "") };
             }
@@ -4422,12 +4693,17 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             if (info.is_chain_hierarchy_node) {
                 applyActiveChainHierarchyHighlight(info);
-            } else if (info.is_shared_clone_block || info.is_shared_parent_vdisk) {
-                applyActiveSharedChainBlockHighlight(info);
-            } else if (info.is_chain_snap_share_block) {
-                applyActiveLineageFromNodeData(info);
-            } else if (info.vdisk_id || info.chain_id || (info.chain_info && Array.isArray(info.chain_info))) {
-                applyActiveLineageFromNodeData(info);
+                const chainInView = isDiskTreemapNode(currentHierarchyNode) && nodeContainsChainVDisk(currentHierarchyNode);
+                if (!chainInView) restoreDiskTreemapFocus();
+            } else {
+                if (!isDiskTreemapNode(currentHierarchyNode)) restoreDiskTreemapFocus();
+                if (info.is_shared_clone_block || info.is_shared_parent_vdisk) {
+                    applyActiveSharedChainBlockHighlight(info);
+                } else if (info.is_chain_snap_share_block) {
+                    applyActiveLineageFromNodeData(info);
+                } else if (info.vdisk_id || info.chain_id || (info.chain_info && Array.isArray(info.chain_info))) {
+                    applyActiveLineageFromNodeData(info);
+                }
             }
 
             if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
@@ -4449,8 +4725,9 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 nodeTypeLabel += ` (${info.lineage_summary.lineage_role})`;
             }
 
+            const inspectorCopyId = inspectorCopyValue(info);
             let fieldsHtml = `
-                <div class="font-bold text-sky-400 text-sm border-b border-slate-700 pb-1 mb-2 break-all">${escapeHtml(getDisplayNodeName(info))}</div>
+                <div ${inspectorCopyId ? 'id="inspector-copy-title"' : ""} class="font-bold text-sky-400 text-sm border-b border-slate-700 pb-1 mb-2 break-all">${escapeHtml(inspectorCopyId || getDisplayNodeName(info))}</div>
                 <div><span class="text-slate-400">Node Type:</span> ${nodeTypeLabel}</div>
             `;
 
