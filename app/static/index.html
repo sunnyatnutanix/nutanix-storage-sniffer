@@ -27,8 +27,11 @@
             uploadMs: 0,
             drawMs: 0,
             hitTestMs: 0,
+            hitTestMethod: null,
             spriteCount: 0,
             visibleCount: 0,
+            spatialCells: 0,
+            lastRelayoutReason: null,
         };
     </script>
     <style>
@@ -579,6 +582,12 @@
         let treemapPixiRootKey = null;
         /** @type {object|null} */
         let treemapPixiViewport = null;
+        /** Phase 4: debounced full re-layout after wrapper / sidebar size changes. */
+        const TREEMAP_RELAYOUT_DEBOUNCE_MS = 120;
+        let treemapRelayoutTimer = null;
+        let lastTreemapLayoutSize = { width: 0, height: 0 };
+        /** @type {ResizeObserver|null} */
+        let treemapResizeObserver = null;
         let loadedOfflineFileName = "";
         let loadedOfflineRawText = "";
         let loadedOfflineSections = [];
@@ -872,6 +881,62 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         let isResizingSidebar = false;
         let lastSidebarWidth = 320;
 
+        function noteTreemapLayoutSize(width, height) {
+            lastTreemapLayoutSize = {
+                width: width || 0,
+                height: height || 0,
+            };
+        }
+
+        function scheduleTreemapRelayout(reason = "resize") {
+            if (treemapRelayoutTimer) clearTimeout(treemapRelayoutTimer);
+            treemapRelayoutTimer = setTimeout(() => {
+                treemapRelayoutTimer = null;
+                flushTreemapRelayout(reason);
+            }, TREEMAP_RELAYOUT_DEBOUNCE_MS);
+        }
+
+        function flushTreemapRelayout(reason = "resize") {
+            if (treemapRelayoutTimer) {
+                clearTimeout(treemapRelayoutTimer);
+                treemapRelayoutTimer = null;
+            }
+            if (!currentHierarchyNode || isAnimating) return;
+            const wrapper = document.getElementById("canvas-wrapper");
+            if (!wrapper) return;
+            const width = wrapper.clientWidth;
+            const height = wrapper.clientHeight;
+            if (width <= 0 || height <= 0) return;
+            if (
+                reason !== "force" &&
+                lastTreemapLayoutSize.width === width &&
+                lastTreemapLayoutSize.height === height
+            ) {
+                return;
+            }
+            noteTreemapLayoutSize(width, height);
+            renderSpaceSnifferView(currentHierarchyNode);
+            window.__treemapPerf = {
+                ...(window.__treemapPerf || {}),
+                lastRelayoutReason: reason,
+                updatedAt: Date.now(),
+            };
+        }
+
+        function initTreemapResizeObserver() {
+            const wrapper = document.getElementById("canvas-wrapper");
+            if (!wrapper || typeof ResizeObserver === "undefined") return;
+            if (treemapResizeObserver) {
+                try { treemapResizeObserver.disconnect(); } catch (_) { /* ignore */ }
+            }
+            treemapResizeObserver = new ResizeObserver(() => {
+                // Full re-layout (not legend-only). Debounce absorbs window + flex thrash.
+                scheduleTreemapRelayout("resize-observer");
+                positionLegendFilterMenu();
+            });
+            treemapResizeObserver.observe(wrapper);
+        }
+
         function initSidebarResizer() {
             const resizer = document.getElementById("resizer");
             const sidebar = document.getElementById("sidebar");
@@ -895,7 +960,8 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 if (newWidth > maxWidth) newWidth = maxWidth;
                 sidebar.style.width = `${newWidth}px`;
                 lastSidebarWidth = newWidth;
-                if (currentHierarchyNode && !isAnimating) renderSpaceSnifferView(currentHierarchyNode);
+                // Debounce: avoid continuous full treemap render on every mousemove.
+                scheduleTreemapRelayout("sidebar-drag");
             }
 
             function handleMouseUp() {
@@ -905,7 +971,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 sidebar.style.transition = "";
                 window.removeEventListener("mousemove", handleMouseMove);
                 window.removeEventListener("mouseup", handleMouseUp);
-                if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+                flushTreemapRelayout("sidebar-drag-end");
             }
         }
 
@@ -1442,7 +1508,11 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
         });
         window.addEventListener("click", () => hideLegendFilterMenu());
-        window.addEventListener("resize", () => positionLegendFilterMenu());
+        window.addEventListener("resize", () => {
+            // Legend reposition + treemap reflow (ResizeObserver also covers wrapper size changes).
+            positionLegendFilterMenu();
+            scheduleTreemapRelayout("window-resize");
+        });
         window.addEventListener("scroll", () => positionLegendFilterMenu(), true);
 
         function openSearchModal() {
@@ -2554,7 +2624,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
 
             setTimeout(() => {
-                if (currentHierarchyNode && !isAnimating) renderSpaceSnifferView(currentHierarchyNode);
+                flushTreemapRelayout("sidebar-toggle");
             }, 320);
         }
 
@@ -2563,6 +2633,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             loadThemeTextStyle();
             initSidebarResizer();
             initSidebarVResizer();
+            initTreemapResizeObserver();
             const savedIp = localStorage.getItem("vdisk_sniffer_ip");
             if (savedIp) document.getElementById("cvm_ip").value = savedIp;
         });
@@ -3358,7 +3429,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         });
 
         function zoomToNode(targetNode, clickedElement = null, animate = true, isZoomOut = false) {
-            if (isAnimating) return;
+            if (isAnimating || !targetNode) return;
 
             const treemapContainer = document.getElementById("treemap");
             const wrapper = document.getElementById("canvas-wrapper");
@@ -3371,11 +3442,13 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 firstRect = canvasRect;
             }
 
+            // Preserve hierarchy contracts for all renderers (classic / worker / pixi).
             currentHierarchyNode = targetNode;
             updateBreadcrumbs(targetNode);
             syncTreeHighlight(targetNode);
             inspectNode(targetNode);
 
+            // renderSpaceSnifferView rebuilds D3 layout + worker prune + Pixi setRoot for the new root.
             if (!animate || !firstRect) {
                 renderSpaceSnifferView(targetNode);
                 return;
@@ -3385,6 +3458,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             renderSpaceSnifferView(targetNode);
 
+            // CSS flip on #treemap (hosts classic canvas or Pixi canvas). Context-menu zoom-out uses isZoomOut.
             const scaleX = firstRect.width / canvasRect.width;
             const scaleY = firstRect.height / canvasRect.height;
             const translateX = firstRect.left - canvasRect.left;
@@ -3652,14 +3726,19 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
             if (found) {
                 hideFloatingTooltip();
-                // Synthetic "Other small files" → zoom into parent folder (Phase 1 / Phase 4 contract).
+                // Synthetic "Other small files" → zoom into parent folder (skip if already viewing that parent).
                 if (found.__syntheticOther || (found.data && found.data.is_other_aggregate)) {
                     const parentName = (found.data && found.data.other_parent_name)
                         || (found.parent && found.parent.data && found.parent.data.name);
-                    const parentTarget = parentName
+                    let parentTarget = parentName
                         ? findNodeByName(currentHierarchyNode, parentName)
-                        : (found.parent || null);
-                    if (parentTarget) zoomToNode(parentTarget, null, true, false);
+                        : null;
+                    if (!parentTarget && found.parent && found.parent.data && found.parent.data.name && fullRootNode) {
+                        parentTarget = findNodeByName(fullRootNode, found.parent.data.name);
+                    }
+                    if (parentTarget && parentTarget !== currentHierarchyNode) {
+                        zoomToNode(parentTarget, null, true, false);
+                    }
                     return;
                 }
                 const targetNode = findNodeByName(currentHierarchyNode, found.data.name);
@@ -3969,6 +4048,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const height = wrapper.clientHeight;
 
             if (width === 0 || height === 0) return;
+            noteTreemapLayoutSize(width, height);
 
             const mode = getTreemapRendererMode();
             const chromeOnly = !!options.chromeOnly;
