@@ -337,8 +337,12 @@
                     <input type="color" id="picker-sharedClone" onchange="updateColorFromPicker('sharedClone', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
-                    <span class="text-slate-300 font-medium">Chain Snap Share</span>
-                    <input type="color" id="picker-chainSnapShare" onchange="updateColorFromPicker('chainSnapShare', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                    <span class="text-slate-300 font-medium">Base Share</span>
+                    <input type="color" id="picker-baseShare" onchange="updateColorFromPicker('baseShare', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
+                </div>
+                <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
+                    <span class="text-slate-300 font-medium">Base Share Bug</span>
+                    <input type="color" id="picker-baseShareBug" onchange="updateColorFromPicker('baseShareBug', this.value)" class="w-8 h-7 bg-transparent cursor-pointer rounded">
                 </div>
                 <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded border border-slate-800">
                     <span class="text-slate-300 font-medium">Reserved Available Space</span>
@@ -636,6 +640,12 @@
         let activeLegendFilter = null; 
         let currentDrawnNodes = [];
         let lastHoveredNode = null;
+        let sharedStorageModeByLineage = new Map(); // lineageId -> "physical" | "logical"
+        let sharedStorageBadgeHitBoxes = []; // [{ lineageId, x0, y0, x1, y1 }]
+        let sharedStorageAnimFrame = null;
+        let sharedStorageAnimToken = 0;
+        let lastSharedStorageBadgeToggleAt = 0;
+        const SHARED_STORAGE_TOGGLE_MS = 250;
         let loadedOfflineFileName = "";
         let loadedOfflineRawText = "";
         let loadedOfflineSections = [];
@@ -1014,7 +1024,8 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             container: '#2e1065',
             snapshots: '#0f766e',
             sharedClone: '#0284c7',
-            chainSnapShare: '#6366f1',
+            baseShare: '#6366f1',
+            baseShareBug: '#dc2626',
             explicitReserve: '#14b8a6',
             thickProv: '#31af40',
             otherVDisks: '#0369a1',
@@ -1249,7 +1260,8 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 { key: "vg", label: "Volume Groups" },
                 { key: "snapshots", label: "Snapshots" },
                 { key: "sharedClone", label: "Shared VDisks" },
-                { key: "chainSnapShare", label: "Chain Snap Share" },
+                { key: "baseShare", label: "Base Share" },
+                { key: "baseShareBug", label: "Base Share Bug" },
                 { key: "explicitReserve", label: "Reserved Available Space" },
                 { key: "thickProv", label: "Thick Provisioned" },
                 { key: "activeChain", label: "Active Chain" },
@@ -1274,7 +1286,8 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 vg: "Volume Groups",
                 snapshots: "Snapshots",
                 sharedClone: "Shared VDisks",
-                chainSnapShare: "Chain Snap Share",
+                baseShare: "Base Share",
+                baseShareBug: "Base Share Bug",
                 explicitReserve: "Reserved Available Space",
                 thickProv: "Thick Provisioned",
                 activeChain: "Active Chain",
@@ -1314,6 +1327,191 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             return null;
         }
 
+        function getSharedStorageLogicalBytes(info) {
+            if (!info) return 0;
+            const terms = info.shared_formula_terms || {};
+            const candidates = [
+                info.logical_shared_storage_bytes,
+                info.shared_clone_usage_bytes,
+                terms.family_max_logical_shared_clone,
+                terms.logical_shared_storage,
+                terms.logical_shared_clone,
+            ];
+            for (const c of candidates) {
+                const n = Number(c);
+                if (Number.isFinite(n) && n > 0) return Math.trunc(n);
+            }
+            return 0;
+        }
+
+        function getSharedStoragePhysicalBytes(info) {
+            if (!info) return 0;
+            const terms = info.shared_formula_terms || {};
+            const candidates = [
+                info.physical_shared_storage_bytes,
+                terms.physical_shared_storage,
+            ];
+            for (const c of candidates) {
+                const n = Number(c);
+                if (Number.isFinite(n) && n > 0) return Math.trunc(n);
+            }
+            const logical = getSharedStorageLogicalBytes(info);
+            const rf = Number(info.replication_factor || terms.replication_factor || 2) || 2;
+            const compression = Number(info.compression_ratio || terms.compression_ratio || 1) || 1;
+            if (logical <= 0 || compression <= 0) return 0;
+            return Math.trunc((logical * rf) / compression);
+        }
+
+        function getSharedStorageModeForInfo(info) {
+            const lid = resolveNodeLineageId(info);
+            if (lid && sharedStorageModeByLineage.has(lid)) {
+                return sharedStorageModeByLineage.get(lid) === "logical" ? "logical" : "physical";
+            }
+            const mode = String(info && info.shared_storage_mode || "physical").toLowerCase();
+            return mode === "logical" ? "logical" : "physical";
+        }
+
+        function sharedStorageDisplayBytes(info, mode = null) {
+            const m = mode || getSharedStorageModeForInfo(info);
+            return m === "logical" ? getSharedStorageLogicalBytes(info) : getSharedStoragePhysicalBytes(info);
+        }
+
+        function sharedStorageFormulaLabel(info, mode = null) {
+            const m = mode || getSharedStorageModeForInfo(info);
+            const terms = (info && info.shared_formula_terms) || {};
+            if (m === "logical") {
+                return terms.logical_formula || "family_max_logical_shared_clone";
+            }
+            return terms.physical_formula || "(family_max_logical_shared_clone × RF) / compression";
+        }
+
+        function applySharedStorageDisplayMode(info, mode, layoutBytes = null) {
+            if (!info || !info.is_shared_parent_vdisk) return;
+            const m = mode === "logical" ? "logical" : "physical";
+            const logical = getSharedStorageLogicalBytes(info);
+            const physical = getSharedStoragePhysicalBytes(info);
+            const display = layoutBytes != null
+                ? Math.max(0, Math.trunc(Number(layoutBytes) || 0))
+                : (m === "logical" ? logical : physical);
+            const areaBytes = display > 0 ? display : 1;
+            info.shared_storage_mode = m;
+            // Layout-only: change value/size for this lineage tile. Do not touch parent
+            // aggregate_exclusive_bytes / container totals (those stay Physical-sized).
+            info.value = areaBytes;
+            info.real_bytes = display;
+            info.shared_storage_bytes = display;
+            info.formatted_size = formatBytes(display);
+            info.logical_shared_storage_bytes = logical;
+            info.physical_shared_storage_bytes = physical;
+            info.formatted_logical_shared_storage = formatBytes(logical);
+            info.formatted_physical_shared_storage = formatBytes(physical);
+            info.shared_formula_source = m === "logical"
+                ? "family_max_logical_shared_clone"
+                : "logical_shared_clone_x_rf_div_compression";
+            info.display_source = info.shared_formula_source;
+        }
+
+        function syncSharedStorageModesInTree(root = fullRootNode) {
+            if (!root) return;
+            root.each(n => {
+                const data = n.data;
+                if (!data || !data.is_shared_parent_vdisk) return;
+                applySharedStorageDisplayMode(data, getSharedStorageModeForInfo(data));
+            });
+        }
+
+        function setSharedStorageMode(lineageId, mode, { animate = true, inspectAfter = true } = {}) {
+            const lid = String(lineageId || "").trim();
+            if (!lid) return;
+            const next = mode === "logical" ? "logical" : "physical";
+            const prev = sharedStorageModeByLineage.has(lid)
+                ? (sharedStorageModeByLineage.get(lid) === "logical" ? "logical" : "physical")
+                : "physical";
+            if (prev === next && !animate) {
+                syncSharedStorageModesInTree();
+                if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+                return;
+            }
+            sharedStorageModeByLineage.set(lid, next);
+
+            const targets = [];
+            if (fullRootNode) {
+                fullRootNode.each(n => {
+                    if (n.data && n.data.is_shared_parent_vdisk && resolveNodeLineageId(n.data) === lid) {
+                        targets.push(n.data);
+                    }
+                });
+            }
+            if (!targets.length) return;
+
+            const fromBytes = sharedStorageDisplayBytes(targets[0], prev);
+            const toBytes = sharedStorageDisplayBytes(targets[0], next);
+
+            const finish = () => {
+                targets.forEach(data => applySharedStorageDisplayMode(data, next));
+                if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+                if (inspectAfter) {
+                    const diskNode = findDiskNodeByData(targets[0]);
+                    if (diskNode) {
+                        inspectNode(diskNode);
+                        syncTreeHighlight(diskNode);
+                    }
+                }
+            };
+
+            if (!animate || fromBytes === toBytes || !currentHierarchyNode) {
+                finish();
+                return;
+            }
+
+            if (sharedStorageAnimFrame) {
+                cancelAnimationFrame(sharedStorageAnimFrame);
+                sharedStorageAnimFrame = null;
+            }
+            const token = ++sharedStorageAnimToken;
+            const start = performance.now();
+            const step = (now) => {
+                if (token !== sharedStorageAnimToken) return;
+                const t = Math.min(1, (now - start) / SHARED_STORAGE_TOGGLE_MS);
+                const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+                const layoutBytes = Math.round(fromBytes + (toBytes - fromBytes) * eased);
+                targets.forEach(data => applySharedStorageDisplayMode(data, next, layoutBytes));
+                if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+                if (t < 1) {
+                    sharedStorageAnimFrame = requestAnimationFrame(step);
+                } else {
+                    sharedStorageAnimFrame = null;
+                    finish();
+                }
+            };
+            sharedStorageAnimFrame = requestAnimationFrame(step);
+        }
+
+        function toggleSharedStorageMode(info, opts = {}) {
+            if (!info || !info.is_shared_parent_vdisk) return;
+            const lid = resolveNodeLineageId(info);
+            if (!lid) return;
+            const cur = getSharedStorageModeForInfo(info);
+            setSharedStorageMode(lid, cur === "logical" ? "physical" : "logical", opts);
+        }
+
+        function toggleSharedStorageModeByLineage(lineageId) {
+            const lid = String(lineageId || "").trim();
+            if (!lid) return;
+            const cur = sharedStorageModeByLineage.has(lid)
+                ? (sharedStorageModeByLineage.get(lid) === "logical" ? "logical" : "physical")
+                : "physical";
+            setSharedStorageMode(lid, cur === "logical" ? "physical" : "logical");
+        }
+
+        function hitTestSharedStorageBadge(x, y) {
+            for (let i = sharedStorageBadgeHitBoxes.length - 1; i >= 0; i--) {
+                const b = sharedStorageBadgeHitBoxes[i];
+                if (x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1) return b;
+            }
+            return null;
+        }
+
         function formatOriginatingClusterLabel(info) {
             const ocid = String((info && info.originating_cluster_id) || "").trim();
             if (!ocid) return { scope: "local", label: "Local", detail: "local" };
@@ -1335,13 +1533,13 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         function getMappedEntityCategory(data) {
             if (data && data.is_partial_extents_block) return "partialExtents";
             if (data && data.is_total_garbage_block) return "totalGarbage";
-            if (data && data.is_chain_snap_share_block) return "chainSnapShare";
+            if (data && data.is_base_share_block) return data.base_share_bug ? "baseShareBug" : "baseShare";
             if (data && (data.is_shared_parent_vdisk || data.is_shared_clone_block)) return "sharedClone";
             const mapped = String((data && data.mapped_entity_name) || data.name || "");
             if (mapped.startsWith("VM:")) return "vm";
             if (mapped.startsWith("VG:")) return "vg";
             if (mapped === "Snapshots") return "snapshots";
-            if (mapped === "Chain Snap Share") return "chainSnapShare";
+            if (mapped === "Base Share") return "baseShare";
             if (mapped === "Partial Extents") return "partialExtents";
             if (mapped === "Total Garbage w/o PEG") return "totalGarbage";
             if (mapped === "Shared Storage" || mapped.startsWith("Root VDisk-Chain-") || mapped.startsWith("Lineage ")) return "sharedClone";
@@ -1356,9 +1554,10 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const data = d.data;
             if (isActiveLineageHighlight(data)) return 'activeChain';
             if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return 'sharedClone';
-            if (data.is_chain_snap_share_block || data.name === "Chain Snap Share") {
-                if (data.is_chain_snap_share_block && activeChainId && String(data.chain_id) === String(activeChainId)) return 'activeChain';
-                return 'chainSnapShare';
+            if (data.is_base_share_block || (data.name && String(data.name).startsWith("Base Share"))) {
+                if (data.base_share_bug) return 'baseShareBug';
+                if (data.is_base_share_block && activeChainId && String(data.chain_id) === String(activeChainId)) return 'activeChain';
+                return 'baseShare';
             }
             if (data.is_partial_extents_block || data.name === "Partial Extents") return 'partialExtents';
             if (data.is_total_garbage_block || data.name === "Total Garbage w/o PEG") return 'totalGarbage';
@@ -1397,9 +1596,10 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         function getEntityColor(data) {
             if (isActiveLineageHighlight(data)) return themeColors.activeChain;
             if (data.is_shared_parent_vdisk || data.name === "Shared Storage") return themeColors.sharedClone;
-            if (data.is_chain_snap_share_block || data.name === "Chain Snap Share") {
-                if (data.is_chain_snap_share_block && activeChainId && String(data.chain_id) === String(activeChainId)) return themeColors.activeChain;
-                return themeColors.chainSnapShare;
+            if (data.is_base_share_block || (data.name && String(data.name).startsWith("Base Share"))) {
+                if (data.base_share_bug) return themeColors.baseShareBug;
+                if (data.is_base_share_block && activeChainId && String(data.chain_id) === String(activeChainId)) return themeColors.activeChain;
+                return themeColors.baseShare;
             }
             if (data.is_partial_extents_block || data.name === "Partial Extents") return themeColors.partialExtents;
             if (data.is_total_garbage_block || data.name === "Total Garbage w/o PEG") return themeColors.totalGarbage;
@@ -1432,7 +1632,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 if (n.data && isActiveLineageHighlight(n.data)) {
                     found = true;
                 }
-                if (n.data && n.data.is_chain_snap_share_block && activeChainId && String(n.data.chain_id) === String(activeChainId)) {
+                if (n.data && n.data.is_base_share_block && activeChainId && String(n.data.chain_id) === String(activeChainId)) {
                     found = true;
                 }
                 if (n.data && n.data.is_shared_clone_block) {
@@ -1966,7 +2166,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         function inspectorCopyValue(info) {
             if (!info) return "";
-            if (info.is_chain_hierarchy_node || info.is_chain_snap_share_block) {
+            if (info.is_chain_hierarchy_node || info.is_base_share_block) {
                 return String(info.chain_id || info.name || "").trim();
             }
             if (info.vdisk_id !== undefined && info.vdisk_id !== null && String(info.vdisk_id).trim() !== "" && !info.is_shared_parent_vdisk && !info.is_shared_clone_block) {
@@ -2549,8 +2749,13 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         }
 
         function formatBytes(bytes) {
-            if (!bytes || bytes <= 0) return "0 KiB";
-            const val = Number(bytes);
+            const raw = Number(bytes);
+            if (!Number.isFinite(raw) || raw === 0) return "0 KiB";
+            if (raw < 0) {
+                const positive = formatBytes(-raw);
+                return positive === "0 KiB" ? "0 KiB" : `-${positive}`;
+            }
+            const val = raw;
             if (val < 1024 * 1024) return (val / 1024).toFixed(2) + " KiB";
             if (val < 1024 * 1024 * 1024) return (val / (1024 * 1024)).toFixed(2) + " MiB";
             if (val < 1024 * 1024 * 1024 * 1024) return (val / (1024 * 1024 * 1024)).toFixed(2) + " GiB";
@@ -2678,10 +2883,12 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
                 overlay.classList.add("hidden");
                 rawTreeData = data.tree;
+                sharedStorageModeByLineage.clear();
                 
                 fullRootNode = d3.hierarchy(rawTreeData)
                     .sum(d => d.value || 0)
                     .sort((a, b) => b.value - a.value);
+                syncSharedStorageModesInTree(fullRootNode);
                 rebuildLineageIndexes();
                 resetHierarchyTreeState();
                 
@@ -2721,10 +2928,12 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         function applyScanTreeData(data) {
             rawTreeData = data.tree;
+            sharedStorageModeByLineage.clear();
 
             fullRootNode = d3.hierarchy(rawTreeData)
                 .sum(d => d.value || 0)
                 .sort((a, b) => b.value - a.value);
+            syncSharedStorageModesInTree(fullRootNode);
             rebuildLineageIndexes();
             resetHierarchyTreeState();
 
@@ -2863,7 +3072,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 // and using container_id first made sibling disks share one expand/selection key.
                 if (data.is_chain_hierarchy_node) part = `chain:${data.chain_id || ""}`;
                 else if (data.is_unmapped_chain_folder) part = "unmapped";
-                else if (data.is_chain_snap_share_block) part = `css:${data.chain_id || data.name || ""}`;
+                else if (data.is_base_share_block) part = `bs:${data.chain_id || data.name || ""}`;
                 else if (data.is_shared_clone_block) part = `sclone:${data.chain_id || data.name || ""}`;
                 else if (data.is_shared_parent_vdisk) part = `shared:${resolveNodeLineageId(data) || data.chain_id || data.name || ""}`;
                 else if (data.vdisk_id !== undefined && data.vdisk_id !== null && String(data.vdisk_id).trim() !== "") part = `vd:${data.vdisk_id}`;
@@ -2926,7 +3135,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         function isRealVdiskLeaf(data) {
             if (!data || typeof data !== "object") return false;
             if (data.vdisk_id === undefined || data.vdisk_id === null || data.vdisk_id === "") return false;
-            if (data.is_shared_parent_vdisk || data.is_shared_clone_block || data.is_chain_snap_share_block) return false;
+            if (data.is_shared_parent_vdisk || data.is_shared_clone_block || data.is_base_share_block) return false;
             if (data.is_partial_extents_block || data.is_total_garbage_block || data.is_explicit_reserve_block) return false;
             if (data.is_free || data.is_chain_hierarchy_node) return false;
             if (Array.isArray(data.children) && data.children.length > 0) return false;
@@ -3013,7 +3222,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         function isTrailingStorageGroup(name) {
             const label = String(name || "");
             return label === "Shared Storage"
-                || label === "Chain Snap Share"
+                || label === "Base Share"
                 || label === "Partial Extents"
                 || label === "Total Garbage w/o PEG"
                 || label === "Reserved Available Space";
@@ -3137,7 +3346,10 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         function buildChainHierarchyData(node) {
             if (!node || typeof node !== "object") return node;
             const clone = { ...node };
-            const children = Array.isArray(node.children) ? node.children : null;
+            // Base Share is disk-treemap accounting under VM/VG; omit from chain hierarchy.
+            const children = Array.isArray(node.children)
+                ? node.children.filter(child => !(child && child.is_base_share_block))
+                : null;
             if (!children) return clone;
             if (children.length > 0 && children.every(isRealVdiskLeaf)) {
                 clone.children = collapseVdisksToChainRows(children);
@@ -3170,7 +3382,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (d3Node.data.name.startsWith("VM:")) return "🖥️";
             if (d3Node.data.name.startsWith("VG:")) return "⛁";
             if (d3Node.data.is_shared_clone_block || d3Node.data.name === "Shared Clones") return "🔗";
-            if (d3Node.data.is_chain_snap_share_block || d3Node.data.name === "Chain Snap Share") return "📎";
+            if (d3Node.data.is_base_share_block || (d3Node.data.name && String(d3Node.data.name).startsWith("Base Share"))) return "📐";
             if (d3Node.data.name.includes("to_remove") || d3Node.data.is_to_remove) return "🗑️";
             if (d3Node.data.name === "Snapshots") return "📁";
             if (d3Node.data.name.includes("Other VDisks")) return "⛃";
@@ -3181,7 +3393,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         function getDisplayNodeName(info) {
             const baseName = (info && info.name) ? info.name : "n/a";
-            const isContainerLike = info && info.children && !info.vdisk_id && !info.is_shared_clone_block && !info.is_chain_snap_share_block && !info.is_partial_extents_block && !info.is_total_garbage_block;
+            const isContainerLike = info && info.children && !info.vdisk_id && !info.is_shared_clone_block && !info.is_base_share_block && !info.is_partial_extents_block && !info.is_total_garbage_block;
             const hasContainerId = info && info.container_id !== undefined && info.container_id !== null && String(info.container_id).trim() !== "";
             if (isContainerLike && hasContainerId) {
                 return `${baseName} (ID: ${info.container_id})`;
@@ -3303,8 +3515,8 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (sig.type === "vdisk") {
                 return data.vdisk_id !== undefined && data.vdisk_id !== null && String(data.vdisk_id) === sig.id;
             }
-            if (sig.type === "chain_snap_share") {
-                return !!data.is_chain_snap_share_block && String(data.chain_id || "") === String(sig.chainId || "");
+            if (sig.type === "base_share") {
+                return !!data.is_base_share_block && String(data.chain_id || "") === String(sig.chainId || "");
             }
             if (sig.type === "shared_block") {
                 return !!data.is_shared_clone_block && String(data.chain_id || "") === String(sig.chainId || "");
@@ -3663,7 +3875,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         function isSelectableTreemapEntity(data) {
             if (!data) return false;
-            if (data.is_shared_clone_block || data.is_shared_parent_vdisk || data.is_chain_snap_share_block) return true;
+            if (data.is_shared_clone_block || data.is_shared_parent_vdisk || data.is_base_share_block) return true;
             if (data.is_partial_extents_block || data.is_total_garbage_block || data.is_explicit_reserve_block) return true;
             if (data.is_chain_hierarchy_node) return true;
             if (data.vdisk_id !== undefined && data.vdisk_id !== null && String(data.vdisk_id).trim() !== "") return true;
@@ -3681,7 +3893,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 return true;
             }
 
-            if (data.is_chain_snap_share_block && nData.is_chain_snap_share_block
+            if (data.is_base_share_block && nData.is_base_share_block
                 && String(nData.chain_id || "") === String(data.chain_id || "")) {
                 return true;
             }
@@ -3758,7 +3970,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 canvas.style.cursor = canZoom ? "zoom-in" : "pointer";
             } else canvas.style.cursor = "default";
 
-            if (found && (found.data.vdisk_id || found.data.is_shared_clone_block || found.data.is_shared_parent_vdisk || found.data.is_chain_snap_share_block || found.data.is_partial_extents_block || found.data.is_total_garbage_block || found.data.is_explicit_reserve_block)) {
+            if (found && (found.data.vdisk_id || found.data.is_shared_clone_block || found.data.is_shared_parent_vdisk || found.data.is_base_share_block || found.data.is_partial_extents_block || found.data.is_total_garbage_block || found.data.is_explicit_reserve_block)) {
                 if (found !== lastHoveredNode) {
                     lastHoveredNode = found;
                     drawCanvasState(); 
@@ -3787,6 +3999,26 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const rect = canvas.getBoundingClientRect();
             const x = event.clientX - rect.left;
             const y = event.clientY - rect.top;
+
+            // Badge click toggles Physical/Logical for that lineage Shared Storage block only.
+            const badgeHit = hitTestSharedStorageBadge(x, y);
+            if (badgeHit && badgeHit.lineageId) {
+                event.preventDefault();
+                event.stopPropagation();
+                hideFloatingTooltip();
+                const now = performance.now();
+                // Debounce so a badge double-click does not flip twice (click + click).
+                if (now - lastSharedStorageBadgeToggleAt < SHARED_STORAGE_TOGGLE_MS + 50) return;
+                lastSharedStorageBadgeToggleAt = now;
+                setSharedStorageMode(
+                    badgeHit.lineageId,
+                    getSharedStorageModeForInfo(badgeHit.data || { lineage_id: badgeHit.lineageId, is_shared_parent_vdisk: true }) === "logical"
+                        ? "physical"
+                        : "logical"
+                );
+                return;
+            }
+
             const found = hitTestTreemap(x, y);
 
             if (!found) return;
@@ -3812,6 +4044,26 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
         }
 
+        function onCanvasDblClick(event) {
+            const canvas = document.getElementById("treemap-canvas");
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+            // Badge already toggles on single click; skip dblclick there to avoid a third flip.
+            if (hitTestSharedStorageBadge(x, y)) {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+            }
+            const found = hitTestTreemap(x, y);
+            if (!found || !found.data || !found.data.is_shared_parent_vdisk) return;
+            event.preventDefault();
+            event.stopPropagation();
+            hideFloatingTooltip();
+            toggleSharedStorageMode(found.data);
+        }
+
         function renderSpaceSnifferView(node) {
             const wrapper = document.getElementById("canvas-wrapper");
             const width = wrapper.clientWidth;
@@ -3832,6 +4084,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 canvas.addEventListener("mousemove", onCanvasMouseMove);
                 canvas.addEventListener("mouseout", onCanvasMouseOut);
                 canvas.addEventListener("click", onCanvasClick);
+                canvas.addEventListener("dblclick", onCanvasDblClick);
                 container.appendChild(canvas);
             }
 
@@ -3910,6 +4163,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             // Flat divider background (shows through gutters between tiles / under titles).
             ctx.fillStyle = "#0f172a";
             ctx.fillRect(0, 0, width, height);
+            sharedStorageBadgeHitBoxes = [];
 
             currentDrawnNodes.forEach(d => {
                 const w = Math.max(0, d.x1 - d.x0);
@@ -3921,14 +4175,14 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 const isExactChainBlockRoot = d.data.is_shared_clone_block && activeChainId && String(d.data.chain_id) === String(activeChainId);
                 const isExactChainBlockMember = d.data.is_shared_clone_block && d.data.member_chain_ids && activeChainId && d.data.member_chain_ids.some(cid => String(cid) === String(activeChainId));
                 const isExactChainBlockActiveMember = d.data.is_shared_clone_block && d.data.chain_id && activeMemberChainIds.has(String(d.data.chain_id));
-                const isExactSnapShareBlock = d.data.is_chain_snap_share_block && (
+                const isExactSnapShareBlock = d.data.is_base_share_block && (
                     (activeChainId && String(d.data.chain_id) === String(activeChainId))
                     || isActiveLineageHighlight(d.data)
                 );
                 const isExactSharedParentBlock = d.data.is_shared_parent_vdisk && isActiveLineageHighlight(d.data);
                 const isChainHierarchyFamily = selectedNodeSignature && selectedNodeSignature.type === "chain_hierarchy" && (
                     (d.data.vdisk_id !== undefined && d.data.vdisk_id !== null && activeChainVDiskIds.has(String(d.data.vdisk_id)))
-                    || (d.data.is_chain_snap_share_block && String(d.data.chain_id || "") === String(selectedNodeSignature.chainId || ""))
+                    || (d.data.is_base_share_block && String(d.data.chain_id || "") === String(selectedNodeSignature.chainId || ""))
                     || (d.data.is_shared_clone_block && (
                         String(d.data.chain_id || "") === String(selectedNodeSignature.chainId || "")
                         || (d.data.member_chain_ids && d.data.member_chain_ids.some(cid => String(cid) === String(selectedNodeSignature.chainId || "")))
@@ -3943,7 +4197,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     const sig = selectedNodeSignature;
                     if (sig.type === "vdisk") return d.data.vdisk_id !== undefined && d.data.vdisk_id !== null && String(d.data.vdisk_id) === sig.id;
                     if (sig.type === "shared_block") return !!d.data.is_shared_clone_block && String(d.data.chain_id || "") === sig.chainId;
-                    if (sig.type === "chain_snap_share") return !!d.data.is_chain_snap_share_block && String(d.data.chain_id || "") === sig.chainId;
+                    if (sig.type === "base_share") return !!d.data.is_base_share_block && String(d.data.chain_id || "") === sig.chainId;
                     if (sig.type === "shared_parent") {
                         if (sig.lineageId) return !!d.data.is_shared_parent_vdisk && resolveNodeLineageId(d.data) === sig.lineageId;
                         return !!d.data.is_shared_parent_vdisk && String(d.data.chain_id || "") === sig.chainId;
@@ -4023,6 +4277,36 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                             ctx.font = "bold 9px sans-serif";
                             ctx.fillText(`🔗`, d.x0 + 7, textY);
                             textY += 14;
+                        }
+                        if (d.data.is_shared_parent_vdisk && w >= 72 && h >= 22) {
+                            const mode = getSharedStorageModeForInfo(d.data);
+                            const badgeText = mode === "logical" ? "[LOGICAL]" : "[PHYSICAL]";
+                            ctx.font = `bold ${Math.round(9 * textScale)}px monospace`;
+                            const badgePadX = 4;
+                            const badgePadY = 2;
+                            const badgeW = Math.ceil(ctx.measureText(badgeText).width) + badgePadX * 2;
+                            const badgeH = Math.round(12 * textScale) + badgePadY * 2;
+                            const badgeX = d.x0 + 4;
+                            const badgeY = d.y0 + 4;
+                            ctx.fillStyle = mode === "logical" ? "rgba(16, 185, 129, 0.92)" : "rgba(14, 165, 233, 0.92)";
+                            ctx.fillRect(badgeX, badgeY, badgeW, badgeH);
+                            ctx.fillStyle = "#0f172a";
+                            ctx.textAlign = "start";
+                            ctx.textBaseline = "middle";
+                            ctx.fillText(badgeText, badgeX + badgePadX, badgeY + badgeH / 2 + 0.5);
+                            ctx.textBaseline = "alphabetic";
+                            const lid = resolveNodeLineageId(d.data);
+                            if (lid) {
+                                sharedStorageBadgeHitBoxes.push({
+                                    lineageId: lid,
+                                    data: d.data,
+                                    x0: badgeX,
+                                    y0: badgeY,
+                                    x1: badgeX + badgeW,
+                                    y1: badgeY + badgeH,
+                                });
+                            }
+                            textY = Math.max(textY, badgeY + badgeH + 10);
                         }
                         // Center usage text inside the leaf block for readability.
                         const usageText = formatBytes(getRealNodeSum(d));
@@ -4117,18 +4401,21 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     <div><span class="text-slate-400">Total Garbage w/o PEG:</span> <span class="text-amber-300 font-bold">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
                     <div class="text-[0.85em] text-slate-500 mt-1">Source: curator_cli display_garbage_report</div>
                 `;
-            } else if (info.is_chain_snap_share_block) {
-                const terms = info.snap_share_formula_terms || {};
+            } else if (info.is_base_share_block) {
+                const terms = info.base_share_formula_terms || {};
                 html += `
                     <div><span class="text-slate-400">Chain ID:</span> <span class="font-mono text-slate-200 text-[0.85em] break-all">${info.chain_id || info.name || "n/a"}</span></div>
-                    <div><span class="text-slate-400">Chain Snap Share:</span> <span class="text-amber-300 font-bold">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
+                    <div><span class="text-slate-400">Base Share:</span> <span class="${info.base_share_bug ? 'text-rose-400' : 'text-amber-300'} font-bold">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
+                    ${info.base_share_bug ? `<div class="text-rose-400 text-[0.85em] mt-0.5">⚠ ${info.base_share_warning || "Base Share is negative (bug); value is not clamped."}</div>` : ""}
                     <div class="mt-1 pt-1 border-t border-slate-700/50 space-y-0.5">
-                        <div><span class="text-slate-400">Logical Live:</span> <span class="text-sky-300 font-bold">${formatBytes(terms.logical_live || 0)}</span></div>
-                        <div><span class="text-slate-400">Logical Shared Clone:</span> <span class="text-emerald-300 font-bold">${formatBytes(terms.logical_shared_clone || 0)}</span></div>
                         <div><span class="text-slate-400">Logical Exclusive:</span> <span class="text-slate-200 font-bold">${formatBytes(terms.logical_exclusive || 0)}</span></div>
-                        <div><span class="text-slate-400">VDisk Exclusive Sum:</span> <span class="text-slate-200 font-bold">${formatBytes(terms.exclusive_sum || 0)}</span></div>
+                        <div><span class="text-slate-400">Logical Shared Clone:</span> <span class="text-emerald-300 font-bold">${formatBytes(terms.logical_shared_clone || 0)}</span></div>
+                        <div><span class="text-slate-400">RF / Compression:</span> <span class="text-slate-200 font-bold">${terms.replication_factor || info.replication_factor || 2} / ${terms.compression_ratio || info.compression_ratio || 1}</span></div>
+                        <div><span class="text-slate-400">Converted Physical:</span> <span class="text-sky-300 font-bold">${formatBytes(terms.converted_physical || 0)}</span></div>
+                        <div><span class="text-slate-400">Live Physical:</span> <span class="text-slate-200 font-bold">${formatBytes(terms.live_physical || 0)}</span></div>
+                        <div><span class="text-slate-400">Same-Chain Snap Physical:</span> <span class="text-slate-200 font-bold">${formatBytes(terms.same_chain_snapshot_physical || 0)}</span></div>
                     </div>
-                    <div class="mt-1 pt-1 border-t border-slate-700/50"><span class="text-slate-400">VDisks in Chain:</span> <span class="font-mono text-slate-200 font-bold">${info.vdisk_ids ? info.vdisk_ids.length : 0}</span></div>
+                    <div class="mt-1 pt-1 border-t border-slate-700/50 text-[0.8em] text-slate-500">((excl + clone) × RF / compression) − (live + same-chain snap physical)</div>
                 `;
             } else if (info.is_shared_clone_block) {
                 html += `
@@ -4140,6 +4427,28 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     </div>
                     <div class="mt-1 pt-1 border-t border-slate-700/50"><span class="text-slate-400">Member Chains:</span> <span class="font-mono text-slate-200 font-bold">${info.member_chain_ids ? info.member_chain_ids.length : 0}</span></div>
                     <div><span class="text-slate-400">VDisks in Family:</span> <span class="font-mono text-slate-200 font-bold">${info.vdisk_ids ? info.vdisk_ids.length : 0}</span></div>
+                `;
+            } else if (info.is_shared_parent_vdisk) {
+                const mode = getSharedStorageModeForInfo(info);
+                const logicalBytes = getSharedStorageLogicalBytes(info);
+                const physicalBytes = getSharedStoragePhysicalBytes(info);
+                const terms = info.shared_formula_terms || {};
+                const rf = terms.replication_factor || info.replication_factor || 2;
+                const compression = terms.compression_ratio || info.compression_ratio || 1;
+                html += `
+                    <div><span class="text-slate-400">Mode:</span> <span class="font-mono ${mode === "logical" ? "text-emerald-300" : "text-sky-300"} font-bold">${mode === "logical" ? "[LOGICAL]" : "[PHYSICAL]"}</span></div>
+                    <div><span class="text-slate-400">Display Size:</span> <span class="text-amber-300 font-bold">${formatBytes(sharedStorageDisplayBytes(info, mode))}</span></div>
+                    <div><span class="text-slate-400">Lineage ID:</span> <span class="font-mono text-slate-200 text-[0.85em] break-all">${resolveNodeLineageId(info) || info.name || "n/a"}</span></div>
+                    <div class="mt-1 pt-1 border-t border-slate-700/50 space-y-0.5">
+                        <div><span class="text-slate-400">Physical:</span> <span class="text-sky-300 font-bold">${formatBytes(physicalBytes)}</span></div>
+                        <div><span class="text-slate-400">Logical:</span> <span class="text-emerald-300 font-bold">${formatBytes(logicalBytes)}</span></div>
+                        <div><span class="text-slate-400">RF / Compression:</span> <span class="text-slate-200 font-bold">${rf} / ${compression}</span></div>
+                    </div>
+                    <div class="mt-1 pt-1 border-t border-slate-700/50 text-[0.8em] text-slate-400 space-y-0.5">
+                        <div><span class="text-slate-500">Physical formula:</span> ${sharedStorageFormulaLabel(info, "physical")}</div>
+                        <div><span class="text-slate-500">Logical formula:</span> ${sharedStorageFormulaLabel(info, "logical")}</div>
+                        <div class="text-slate-500">Double-click block or click badge to toggle this lineage only</div>
+                    </div>
                 `;
             } else if (isVmGroup || isVgGroup) {
                 const leafRows = [];
@@ -4188,7 +4497,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 if (vdiskSizeSum > 0 || info.vdisk_size !== undefined) html += `<div><span class="text-slate-400">Provisioned Size:</span> <span class="text-emerald-300 font-bold">${formatBytes(vdiskSizeSum)}</span></div>`;
             }
 
-            if (info.vdisk_id || (!info.children && !info.is_shared_clone_block && !info.is_chain_snap_share_block && !info.is_partial_extents_block && !info.is_total_garbage_block)) {
+            if (!info.is_shared_parent_vdisk && (info.vdisk_id || (!info.children && !info.is_shared_clone_block && !info.is_base_share_block && !info.is_partial_extents_block && !info.is_total_garbage_block))) {
                 html += `
                     <div class="text-[0.85em] text-slate-300 space-y-0.5 mt-1 border-t border-slate-800 pt-1">
                         <div><span class="text-slate-400">VDisk ID:</span> ${info.vdisk_id || "n/a"}</div>
@@ -4317,7 +4626,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
         function isIndexableChainVdisk(info) {
             if (!info) return false;
             if (info.vdisk_id === undefined || info.vdisk_id === null || info.vdisk_id === "") return false;
-            if (info.is_shared_parent_vdisk || info.is_shared_clone_block || info.is_chain_snap_share_block) return false;
+            if (info.is_shared_parent_vdisk || info.is_shared_clone_block || info.is_base_share_block) return false;
             if (info.is_chain_hierarchy_node || info.is_partial_extents_block || info.is_total_garbage_block || info.is_explicit_reserve_block) return false;
             if (info.is_free) return false;
             return true;
@@ -4460,7 +4769,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     nd.vdisk_id !== null &&
                     !nd.is_shared_parent_vdisk &&
                     !nd.is_shared_clone_block &&
-                    !nd.is_chain_snap_share_block &&
+                    !nd.is_base_share_block &&
                     !Array.isArray(nd.children);
                 if (isRealVdiskLeaf && String(nd.chain_id || "") === cid) {
                     const exclusiveBytes = Number(
@@ -4674,8 +4983,8 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 selectedNodeSignature = { type: "chain_hierarchy", chainId: String(info.chain_id || "") };
             } else if (info.is_shared_clone_block) {
                 selectedNodeSignature = { type: "shared_block", chainId: String(info.chain_id || "") };
-            } else if (info.is_chain_snap_share_block) {
-                selectedNodeSignature = { type: "chain_snap_share", chainId: String(info.chain_id || "") };
+            } else if (info.is_base_share_block) {
+                selectedNodeSignature = { type: "base_share", chainId: String(info.chain_id || "") };
             } else if (info.is_shared_parent_vdisk) {
                 selectedNodeSignature = {
                     type: "shared_parent",
@@ -4699,7 +5008,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 if (!isDiskTreemapNode(currentHierarchyNode)) restoreDiskTreemapFocus();
                 if (info.is_shared_clone_block || info.is_shared_parent_vdisk) {
                     applyActiveSharedChainBlockHighlight(info);
-                } else if (info.is_chain_snap_share_block) {
+                } else if (info.is_base_share_block) {
                     applyActiveLineageFromNodeData(info);
                 } else if (info.vdisk_id || info.chain_id || (info.chain_info && Array.isArray(info.chain_info))) {
                     applyActiveLineageFromNodeData(info);
@@ -4712,7 +5021,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 info.is_free ? 'Free Storage Space' :
                 info.is_to_remove ? 'Pending Deletion VDisk' :
                 info.is_shared_clone_block ? 'Shared Clone / Snapshot Block' :
-                info.is_chain_snap_share_block ? 'Chain Snap Share Block' :
+                info.is_base_share_block ? (info.base_share_bug ? 'Base Share Block (BUG)' : 'Base Share Block') :
                 info.is_partial_extents_block ? 'Partial Extents Block' :
                 info.is_total_garbage_block ? 'Total Garbage w/o PEG Block' :
                 info.is_explicit_reserve_block ? 'Reserved Available Space Block' :
@@ -4741,9 +5050,9 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
                 if (info.name === "Shared Clones") {
                     fieldsHtml += `<div><span class="text-slate-400">Total Chain IDs:</span> <span class="font-mono text-slate-200 font-bold">${totalChainIds}</span></div>`;
-                } else if (info.name === "Chain Snap Share") {
-                    const snapCount = d.leaves().filter(leaf => leaf.data.is_chain_snap_share_block).length;
-                    fieldsHtml += `<div><span class="text-slate-400">Chain Snap Share Blocks:</span> <span class="font-mono text-slate-200 font-bold">${snapCount}</span></div>`;
+                } else if (info.name === "Base Share") {
+                    const snapCount = d.leaves().filter(leaf => leaf.data.is_base_share_block).length;
+                    fieldsHtml += `<div><span class="text-slate-400">Base Share Blocks:</span> <span class="font-mono text-slate-200 font-bold">${snapCount}</span></div>`;
                 } else {
                     if (totalVdisks > 0) fieldsHtml += `<div><span class="text-slate-400">Total VDisks:</span> <span class="font-mono text-slate-200 font-bold">${totalVdisks}</span></div>`;
                     if (totalChainIds > 0) fieldsHtml += `<div><span class="text-slate-400">Total Shared Chain IDs:</span> <span class="font-mono text-slate-200 font-bold">${totalChainIds}</span></div>`;
@@ -4816,19 +5125,24 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                         <div class="text-[10px] text-slate-500">Source: curator_cli display_garbage_report</div>
                     </div>
                 `;
-            } else if (info.is_chain_snap_share_block) {
-                const terms = info.snap_share_formula_terms || {};
+            } else if (info.is_base_share_block) {
+                const terms = info.base_share_formula_terms || {};
+                const bugBorder = info.base_share_bug ? "border-rose-500/50" : "border-indigo-500/40";
+                const bugTitle = info.base_share_bug ? "text-rose-300" : "text-indigo-300";
                 fieldsHtml += `
-                    <div class="mt-2 p-2.5 bg-slate-950/70 border border-indigo-500/40 rounded-lg space-y-1.5 font-sans">
-                        <div class="text-xs font-bold text-indigo-300 border-b border-slate-800 pb-1">Chain Snap Share</div>
+                    <div class="mt-2 p-2.5 bg-slate-950/70 border ${bugBorder} rounded-lg space-y-1.5 font-sans">
+                        <div class="text-xs font-bold ${bugTitle} border-b border-slate-800 pb-1">Base Share${info.base_share_bug ? " (BUG)" : ""}</div>
+                        ${info.base_share_bug ? `<div class="text-[11px] text-rose-300 bg-rose-950/40 border border-rose-700/40 rounded px-2 py-1">${escapeHtml(info.base_share_warning || "Base Share is negative — formula bug or incomplete accounting; value is not clamped.")}</div>` : ""}
                         <div class="flex justify-between items-center"><span class="text-slate-400">Chain ID:</span> <span class="font-mono text-slate-200 text-[10px] break-all">${escapeHtml(valOrNa(info.chain_id || info.name))}</span></div>
-                        <div class="flex justify-between items-center"><span class="text-slate-400">Snap Share:</span> <span class="font-mono text-amber-300 font-bold text-xs">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
-                        <div class="flex justify-between items-center"><span class="text-slate-400">Logical Live:</span> <span class="font-mono text-sky-300 font-bold">${formatBytes(terms.logical_live || 0)}</span></div>
-                        <div class="flex justify-between items-center"><span class="text-slate-400">Logical Shared Clone:</span> <span class="font-mono text-emerald-300 font-bold">${formatBytes(terms.logical_shared_clone || 0)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Base Share:</span> <span class="font-mono ${info.base_share_bug ? 'text-rose-300' : 'text-amber-300'} font-bold text-xs">${info.formatted_size || formatBytes(info.real_bytes || 0)}</span></div>
                         <div class="flex justify-between items-center"><span class="text-slate-400">Logical Exclusive:</span> <span class="font-mono text-slate-200 font-bold">${formatBytes(terms.logical_exclusive || 0)}</span></div>
-                        <div class="flex justify-between items-center"><span class="text-slate-400">VDisk Exclusive Sum:</span> <span class="font-mono text-slate-200 font-bold">${formatBytes(terms.exclusive_sum || 0)}</span></div>
-                        ${info.snap_share_formula_source ? `<div class="flex justify-between items-center"><span class="text-slate-400">Formula:</span> <span class="font-mono text-cyan-300 text-[10px]">${valOrNa(info.snap_share_formula_source)}</span></div>` : ""}
-                        <div class="text-[10px] text-slate-500">(live - clone) × 2 − exclusive sum</div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Logical Shared Clone:</span> <span class="font-mono text-emerald-300 font-bold">${formatBytes(terms.logical_shared_clone || 0)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">RF / Compression:</span> <span class="font-mono text-slate-200 font-bold">${terms.replication_factor || info.replication_factor || 2} / ${terms.compression_ratio || info.compression_ratio || 1}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Converted Physical:</span> <span class="font-mono text-sky-300 font-bold">${formatBytes(terms.converted_physical || 0)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Live Physical:</span> <span class="font-mono text-slate-200 font-bold">${formatBytes(terms.live_physical || 0)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Same-Chain Snap Physical:</span> <span class="font-mono text-slate-200 font-bold">${formatBytes(terms.same_chain_snapshot_physical || 0)}</span></div>
+                        ${info.base_share_formula_source ? `<div class="flex justify-between items-center"><span class="text-slate-400">Formula:</span> <span class="font-mono text-cyan-300 text-[10px]">${valOrNa(info.base_share_formula_source)}</span></div>` : ""}
+                        <div class="text-[10px] text-slate-500">((excl + clone) × RF / compression) − (live + same-chain snap physical)</div>
                         <div class="mt-2 pt-2 border-t border-slate-800 space-y-1">
                             <div class="text-[10px] text-slate-400 font-medium">VDisks in this chain:</div>
                             <div class="space-y-1 max-h-36 overflow-y-auto pr-1">
@@ -4892,19 +5206,39 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 fieldsHtml += `</div></div></div>`;
             } else if (info.is_shared_parent_vdisk) {
                 const leafRows = Array.isArray(info.leaf_candidates) ? info.leaf_candidates : [];
+                const mode = getSharedStorageModeForInfo(info);
+                const logicalBytes = getSharedStorageLogicalBytes(info);
+                const physicalBytes = getSharedStoragePhysicalBytes(info);
+                const terms = info.shared_formula_terms || {};
+                const rf = terms.replication_factor || info.replication_factor || 2;
+                const compression = terms.compression_ratio || info.compression_ratio || 1;
+                const lid = resolveNodeLineageId(info) || "";
                 const chainRows = (leafRows.length
                     ? leafRows.map(r => ({ chainId: String(r.chain_id), sharedBytes: Number(r.shared_bytes || 0) }))
                     : [{ chainId: String(info.selected_shared_chain_id || info.chain_id || ""), sharedBytes: Number(info.shared_storage_bytes || info.real_bytes || 0) }]
                 ).filter(r => r.chainId);
                 fieldsHtml += `
                     <div class="mt-2 p-2.5 bg-slate-950/70 border border-sky-500/40 rounded-lg space-y-1.5 font-sans">
-                        <div class="text-xs font-bold text-sky-400 border-b border-slate-800 pb-1">🔗 Root Chain Shared Storage</div>
-                        <div class="flex justify-between items-center"><span class="text-slate-400">Shared Size:</span> <span class="font-mono text-amber-300 font-bold text-xs">${formatBytes(info.shared_storage_bytes || info.real_bytes || 0)}</span></div>
+                        <div class="text-xs font-bold text-sky-400 border-b border-slate-800 pb-1 flex items-center justify-between gap-2">
+                            <span>🔗 Root Chain Shared Storage</span>
+                            <button type="button" onclick="toggleSharedStorageModeByLineage('${escapeHtml(lid)}')"
+                                class="px-2 py-0.5 rounded border font-mono text-[10px] font-bold ${mode === "logical" ? "border-emerald-500/60 bg-emerald-900/40 text-emerald-300" : "border-sky-500/60 bg-sky-900/40 text-sky-300"}"
+                                title="Toggle Physical/Logical for this lineage only">
+                                ${mode === "logical" ? "[LOGICAL]" : "[PHYSICAL]"}
+                            </button>
+                        </div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Display Size:</span> <span class="font-mono text-amber-300 font-bold text-xs">${formatBytes(sharedStorageDisplayBytes(info, mode))}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Physical:</span> <span class="font-mono text-sky-300 font-bold text-xs">${formatBytes(physicalBytes)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Logical:</span> <span class="font-mono text-emerald-300 font-bold text-xs">${formatBytes(logicalBytes)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">RF / Compression:</span> <span class="font-mono text-slate-200 font-bold">${rf} / ${compression}</span></div>
+                        <div class="text-[10px] text-slate-400">Physical: ${escapeHtml(sharedStorageFormulaLabel(info, "physical"))}</div>
+                        <div class="text-[10px] text-slate-400">Logical: ${escapeHtml(sharedStorageFormulaLabel(info, "logical"))}</div>
                         <div class="flex justify-between items-center"><span class="text-slate-400">Lineage ID:</span> <span class="font-mono text-slate-200 text-[10px] break-all">${valOrNa(info.lineage_id || info.name)}</span></div>
                         <div class="flex justify-between items-center"><span class="text-slate-400">Root Chain ID:</span> <span class="font-mono text-slate-200 text-[10px] break-all">${valOrNa(info.root_chain_id || info.chain_id)}</span></div>
                         <div class="flex justify-between items-center"><span class="text-slate-400">Selected Chain:</span> <span class="font-mono text-emerald-300 text-[10px] break-all">${valOrNa(info.selected_shared_chain_id || info.chain_id)}</span></div>
-                        ${info.shared_formula_source ? `<div class="flex justify-between items-center"><span class="text-slate-400">Shared Formula:</span> <span class="font-mono text-cyan-300">${valOrNa(info.shared_formula_source)}</span></div>` : ""}
+                        ${info.shared_formula_source ? `<div class="flex justify-between items-center"><span class="text-slate-400">Active Formula:</span> <span class="font-mono text-cyan-300">${valOrNa(info.shared_formula_source)}</span></div>` : ""}
                         ${info.shared_formula_terms ? `<div class="text-[10px] text-slate-400">Terms: live=${formatBytes(info.shared_formula_terms.logical_live || 0)}, clone=${formatBytes(info.shared_formula_terms.logical_shared_clone || 0)}, peg=${formatBytes(info.shared_formula_terms.physical_peg || 0)}, exclusive_sum=${formatBytes(info.shared_formula_terms.exclusive_sum || 0)}</div>` : ""}
+                        <div class="text-[10px] text-slate-500">Double-click the treemap tile or click the badge to toggle this lineage only. Container totals stay Physical-sized.</div>
                         ${leafRows.length ? `<div class="text-[10px] text-slate-400 pt-1 border-t border-slate-800">Leaf Candidates: ${leafRows.map(r => `${r.chain_id}:${formatBytes(r.shared_bytes || 0)}`).join(", ")}</div>` : ""}
                         ${chainRows.length ? `
                         <div class="mt-2 pt-2 border-t border-slate-800 space-y-2">

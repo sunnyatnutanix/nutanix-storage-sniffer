@@ -1,3 +1,4 @@
+import math
 import re
 
 def parse_size_to_bytes(size_str: str) -> int:
@@ -252,6 +253,106 @@ def parse_curator_garbage_report(garbage_log: str) -> dict:
     return garbage_map
 
 
+DEFAULT_DATA_REDUCTION_RATIOS = {
+    "clone": 1.0,
+    "snapshot": 1.0,
+    "dedup": 1.0,
+    "compression": 1.0,
+    "erasureCoding": 1.0,
+}
+
+_DATA_REDUCTION_TECHNIQUE_KEYS = {
+    "clone": "clone",
+    "snapshot": "snapshot",
+    "dedup": "dedup",
+    "compression": "compression",
+    "erasure coding": "erasureCoding",
+}
+
+
+def default_data_reduction_ratios() -> dict:
+    """Return a fresh copy of the all-1.0 fallback ratio set."""
+    return dict(DEFAULT_DATA_REDUCTION_RATIOS)
+
+
+def _normalize_container_data_reduction_ratios(raw_ratios: dict) -> dict:
+    """If any required ratio is missing/<=0/NaN, return all 1.0 for the container."""
+    required = ("clone", "snapshot", "dedup", "compression", "erasureCoding")
+    if any(k not in raw_ratios for k in required):
+        return default_data_reduction_ratios()
+    normalized = {}
+    for key in required:
+        try:
+            value = float(raw_ratios[key])
+        except (TypeError, ValueError):
+            return default_data_reduction_ratios()
+        if math.isnan(value) or value <= 0:
+            return default_data_reduction_ratios()
+        normalized[key] = value
+    return normalized
+
+
+def parse_curator_data_reduction_report(report_log: str) -> dict:
+    """Parse === CURATOR_DATA_REDUCTION_REPORT === first ASCII table into per-container ratios.
+
+    Returns dataReductionRatios[container_id] with clone/snapshot/dedup/compression/erasureCoding.
+    Only the first Technique table is read (stops before Compression Technique table).
+    Missing/<=0/NaN for any ratio on a container → all 1.0 for that container.
+    """
+    ratios_by_container = {}
+    if not report_log:
+        return ratios_by_container
+
+    in_first_table = False
+    raw_by_cid = {}
+
+    for line in report_log.splitlines():
+        stripped = line.strip()
+        if "|" not in stripped or stripped.startswith("+"):
+            continue
+        parts = [p.strip() for p in stripped.split("|") if p.strip()]
+        if not parts:
+            continue
+
+        joined = " ".join(parts).lower()
+        # Second table (per-algorithm compression) — stop after first Technique table.
+        if "compression technique" in joined:
+            break
+        if "container" in joined and "technique" in joined and "ratio" in joined:
+            in_first_table = True
+            continue
+        if not in_first_table:
+            continue
+        if not parts[0].isdigit():
+            continue
+
+        cid = str(parts[0])
+        technique = parts[1] if len(parts) > 1 else ""
+        ratio_key = _DATA_REDUCTION_TECHNIQUE_KEYS.get(technique.lower().strip())
+        if not ratio_key:
+            continue
+        ratio_str = parts[-1] if len(parts) >= 6 else ""
+        try:
+            ratio_val = float(ratio_str)
+        except (TypeError, ValueError):
+            ratio_val = float("nan")
+        raw_by_cid.setdefault(cid, {})[ratio_key] = ratio_val
+
+    for cid, raw_ratios in raw_by_cid.items():
+        ratios_by_container[cid] = _normalize_container_data_reduction_ratios(raw_ratios)
+    return ratios_by_container
+
+
+def get_data_reduction_ratios(ratios_map: dict, container_id) -> dict:
+    """Lookup ratios for a container; missing containers get all 1.0."""
+    if not ratios_map:
+        return default_data_reduction_ratios()
+    found = ratios_map.get(str(container_id))
+    if not found:
+        return default_data_reduction_ratios()
+    return dict(found)
+
+
 def parse_ncli_vms(ncli_vm_log: str) -> dict:
     def _extract_vm_vdisk_ids(vdisk_entry: str):
         ids = []
@@ -404,6 +505,12 @@ def parse_ncli_containers_detailed(ncli_ctr_log: str) -> list:
         explicit_res_logical = _extract(r'Explicit Res\. \(Logical\)\s*:\s*([^\n]+)')
         thick_logical = _extract(r'Thick Prov\. \(Logical\)\s*:\s*([^\n]+)')
         rf = _extract(r'Replication Factor\s*:\s*([^\n]+)')
+        try:
+            rf_int = int(str(rf).strip()) if str(rf).strip() else 2
+            if rf_int <= 0:
+                rf_int = 2
+        except Exception:
+            rf_int = 2
 
         # Prefer explicit "(x bytes)" value where available.
         def _bytes_from_field(field_val: str):
@@ -424,7 +531,7 @@ def parse_ncli_containers_detailed(ncli_ctr_log: str) -> list:
             "max_capacity_physical": max_phys,
             "explicit_res_logical": explicit_res_logical,
             "thick_prov_logical": thick_logical,
-            "replication_factor": rf,
+            "replication_factor": rf_int,
             "free_space_physical_bytes": _bytes_from_field(free_phys),
             "used_space_physical_bytes": _bytes_from_field(used_phys),
             "max_capacity_physical_bytes": _bytes_from_field(max_phys),
