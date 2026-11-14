@@ -200,89 +200,200 @@ def format_bytes(bytes_val: int) -> str:
     else: return f"{val / (1024**4):.2f} TiB"
 
 
+def format_signed_bytes(bytes_val: int) -> str:
+    """Format bytes that may be negative (Base Share bug cases)."""
+    n = int(bytes_val or 0)
+    if n < 0:
+        return f"-{format_bytes(-n)}"
+    return format_bytes(n)
+
+
 def is_live_vdisk(vd) -> bool:
     """Live = not Immutable/ImmutableSnapshot and not in recycle bin."""
     if vd is None:
         return False
     if hasattr(vd, "is_snapshot") or hasattr(vd, "is_in_recycle_bin"):
         return (not bool(getattr(vd, "is_snapshot", False))
-                and not bool(getattr(vd, "is_in_recycle_bin", False)))
+                and not bool(getattr(vd, "is_in_recycle_bin", False))
+                and not bool(getattr(vd, "is_to_remove", False)))
     if isinstance(vd, dict):
         mut = str(vd.get("mutability_state", "") or "")
-        return ("Immutable" not in mut) and not bool(vd.get("in_recycle_bin", False))
+        return (
+            ("Immutable" not in mut)
+            and not bool(vd.get("in_recycle_bin", False))
+            and not bool(vd.get("to_remove", False))
+            and not bool(vd.get("is_snapshot", False))
+            and not bool(vd.get("is_in_recycle_bin", False))
+            and not bool(vd.get("is_to_remove", False))
+        )
     return False
 
 
-def compute_chain_snap_share(
+def is_immutable_snapshot_vdisk(vd) -> bool:
+    """True for Immutable / ImmutableSnapshot vdisks (not recycle/pending)."""
+    if vd is None:
+        return False
+    if hasattr(vd, "is_snapshot"):
+        return bool(getattr(vd, "is_snapshot", False)) and not bool(
+            getattr(vd, "is_in_recycle_bin", False)
+        )
+    if isinstance(vd, dict):
+        if bool(vd.get("in_recycle_bin", False)) or bool(vd.get("is_in_recycle_bin", False)):
+            return False
+        if bool(vd.get("is_snapshot", False)):
+            return True
+        return "Immutable" in str(vd.get("mutability_state", "") or "")
+    return False
+
+
+def normalize_replication_factor(raw_rf) -> int:
+    try:
+        rf = int(str(raw_rf if raw_rf is not None else "2").strip())
+        if rf <= 0:
+            return 2
+        return rf
+    except Exception:
+        return 2
+
+
+def normalize_compression_ratio(raw_ratio) -> float:
+    try:
+        ratio = float(raw_ratio)
+    except (TypeError, ValueError):
+        return 1.0
+    if ratio != ratio or ratio <= 0:  # NaN or non-positive
+        return 1.0
+    return ratio
+
+
+def physical_shared_storage_bytes(logical_shared_clone: int, replication_factor: int, compression_ratio: float) -> int:
+    """Physical Shared Storage = (max logical_shared_clone * RF) / compression."""
+    clone = int(logical_shared_clone or 0)
+    if clone <= 0:
+        return 0
+    rf = normalize_replication_factor(replication_factor)
+    compression = normalize_compression_ratio(compression_ratio)
+    return int((clone * rf) / compression)
+
+
+def compute_base_share(
     chain_id: str,
     chain_vdisk_ids: list,
     chain_usage_map: dict,
     usage_map: dict,
-    vdisk_lookup: dict = None,
+    vdisk_lookup: dict,
+    replication_factor: int = 2,
+    compression_ratio: float = 1.0,
 ) -> dict:
-    """chain_snap_share = (logical_live - logical_shared_clone) * 2 - exclusive_sum."""
-    stats = chain_usage_map.get(chain_id, {}) or {}
-    logical_live = int(stats.get("logical_live", 0) or 0)
-    logical_clone = int(stats.get("logical_shared_clone", 0) or 0)
+    """Base Share = ((logical_exclusive + logical_shared_clone) * RF / compression) - (live + same-chain snap physical).
+
+    Negative values are preserved and flagged as base_share_bug (do not clamp).
+    Physical bytes come from curator get_vdisk_usage exclusive.
+    """
+    stats = chain_usage_map.get(str(chain_id), {}) or {}
     logical_exclusive = int(stats.get("logical_exclusive", 0) or 0)
-    vids = list(chain_vdisk_ids or [])
-    exclusive_sum = sum(int(usage_map.get(str(vd_id), 0) or 0) for vd_id in vids)
+    logical_clone = int(stats.get("logical_shared_clone", 0) or 0)
+    logical_live = int(stats.get("logical_live", 0) or 0)
+    rf = normalize_replication_factor(replication_factor)
+    compression = normalize_compression_ratio(compression_ratio)
+    vids = [str(v) for v in (chain_vdisk_ids or [])]
+
+    live_vids = []
+    snap_vids = []
+    live_physical = 0
+    snap_physical = 0
+    for vid in vids:
+        vd = (vdisk_lookup or {}).get(str(vid))
+        exclusive = int(usage_map.get(str(vid), 0) or 0)
+        if is_live_vdisk(vd):
+            live_vids.append(str(vid))
+            live_physical += exclusive
+        elif is_immutable_snapshot_vdisk(vd):
+            snap_vids.append(str(vid))
+            snap_physical += exclusive
+
+    converted = int(((logical_exclusive + logical_clone) * rf) / compression)
+    live_snap_physical = int(live_physical + snap_physical)
+    base_share = int(converted - live_snap_physical)
+    base_share_bug = base_share < 0
     terms = {
-        "logical_live": logical_live,
-        "logical_shared_clone": logical_clone,
         "logical_exclusive": logical_exclusive,
-        "exclusive_sum": int(exclusive_sum),
-        "snap_share": 0,
+        "logical_shared_clone": logical_clone,
+        "logical_live": logical_live,
+        "replication_factor": rf,
+        "compression_ratio": compression,
+        "converted_physical": converted,
+        "live_physical": int(live_physical),
+        "same_chain_snapshot_physical": int(snap_physical),
+        "live_and_snapshot_physical": live_snap_physical,
+        "base_share": base_share,
     }
-    has_live = None
-    if vdisk_lookup is not None:
-        has_live = any(is_live_vdisk(vdisk_lookup.get(str(vd_id))) for vd_id in vids)
-    if logical_live == 0:
-        source = "skipped_logical_live_zero"
-        snap_share = 0
-    elif logical_live == logical_exclusive:
-        source = "skipped_live_equals_exclusive"
-        snap_share = 0
-    elif len(vids) <= 1:
-        source = "skipped_single_vdisk"
-        snap_share = 0
-    elif has_live is False:
-        source = "skipped_no_live_vdisk"
-        snap_share = 0
-    else:
-        snap_share = (logical_live - logical_clone) * 2 - exclusive_sum
-        if snap_share <= 0:
-            source = "skipped_non_positive"
-            snap_share = 0
-        else:
-            source = "live_minus_clone_x2_minus_exclusive_sum"
-            terms["snap_share"] = int(snap_share)
     return {
-        "logical_live": logical_live,
-        "logical_shared_clone": logical_clone,
         "logical_exclusive": logical_exclusive,
-        "exclusive_sum": int(exclusive_sum),
-        "snap_share": int(max(0, snap_share)),
+        "logical_shared_clone": logical_clone,
+        "logical_live": logical_live,
+        "replication_factor": rf,
+        "compression_ratio": compression,
+        "live_vdisk_ids": live_vids,
+        "snapshot_vdisk_ids": snap_vids,
+        "live_physical": int(live_physical),
+        "same_chain_snapshot_physical": int(snap_physical),
+        "base_share": base_share,
+        "base_share_bug": base_share_bug,
         "terms": terms,
-        "source": source,
+        "source": "exclusive_plus_clone_x_rf_div_compression_minus_live_snap_physical",
+        "warning": (
+            "Base Share is negative — formula bug or incomplete accounting; value is not clamped."
+            if base_share_bug
+            else None
+        ),
     }
 
 
-def build_chain_snap_share_leaf(chain_id: str, chain_vdisk_ids: list, computed: dict, container_name: str = None) -> dict:
-    snap_share = int(computed.get("snap_share", 0) or 0)
+def build_base_share_leaf(
+    chain_id: str,
+    chain_vdisk_ids: list,
+    computed: dict,
+    container_name: str = None,
+    mapped_entity_name: str = None,
+) -> dict:
+    base_share = int(computed.get("base_share", 0) or 0)
+    base_share_bug = bool(computed.get("base_share_bug", False))
+    layout_bytes = abs(base_share) if base_share != 0 else 1
     return {
-        "name": str(chain_id),
+        "name": f"Base Share {chain_id}",
         "chain_id": str(chain_id),
         "vdisk_id": None,
         "vdisk_ids": list(chain_vdisk_ids or []),
-        "is_chain_snap_share_block": True,
-        "value": snap_share,
-        "real_bytes": snap_share,
-        "formatted_size": format_bytes(snap_share),
-        "snap_share_formula_source": computed.get("source"),
-        "snap_share_formula_terms": computed.get("terms", {}),
+        "live_vdisk_ids": list(computed.get("live_vdisk_ids") or []),
+        "snapshot_vdisk_ids": list(computed.get("snapshot_vdisk_ids") or []),
+        "is_base_share_block": True,
+        "base_share_bug": base_share_bug,
+        "value": layout_bytes,
+        "real_bytes": base_share,
+        "formatted_size": format_signed_bytes(base_share),
+        "base_share_formula_source": computed.get("source"),
+        "base_share_formula_terms": computed.get("terms", {}),
+        "base_share_warning": computed.get("warning"),
+        "replication_factor": computed.get("replication_factor"),
+        "compression_ratio": computed.get("compression_ratio"),
         "container_name": container_name,
+        "mapped_entity_name": mapped_entity_name,
+        "classification_reason": "base_share_bug" if base_share_bug else "base_share",
     }
+
+
+def prefer_live_entity_name(existing: str, candidate: str) -> str:
+    """Prefer VM over VG when multiple lives claim a chain; else stable lexical min."""
+    if not existing:
+        return candidate
+    if not candidate:
+        return existing
+    if existing.startswith("VG:") and candidate.startswith("VM:"):
+        return candidate
+    if existing.startswith("VM:") and candidate.startswith("VG:"):
+        return existing
+    return existing if existing <= candidate else candidate
 
 def extract_log_sections(raw_output: str) -> dict:
     headers = [
@@ -467,15 +578,15 @@ def process_container_centric_logs(sections: dict):
         chain_vdisk_ids = chain_to_vdisk_ids.get(chain_id, [])
         exclusive_sum = sum(int(curator_usage_map.get(str(vd_id), 0) or 0) for vd_id in chain_vdisk_ids)
         if logical_clone > 0:
-            shared_bytes = (logical_clone * 2)
-            source = "curator_chain_x2"
+            # Physical conversion applied when emitting Shared Storage nodes (RF + compression).
+            shared_bytes = logical_clone
+            source = "logical_shared_clone_pending_physical"
         elif len(chain_vdisk_ids) <= 1:
             shared_bytes = 0
             source = "single_vdisk_zero_clone_no_shared"
         else:
-            # Snapshot-chain leftover is owned by Chain Snap Share; do not count it here.
             shared_bytes = 0
-            source = "zero_clone_use_chain_snap_share"
+            source = "zero_logical_shared_clone"
         payload = {
             "shared_bytes": int(shared_bytes),
             "source": source,
@@ -924,13 +1035,85 @@ def process_container_centric_logs(sections: dict):
                 continue
             candidate_root_id = str(candidate_info.get("synthetic_root_id"))
             shared_root_nodes[candidate_root_id] = candidate_info
+
+        # Attach same-chain snapshots under VM/VG; leave Snapshots group unmapped-only.
+        chain_live_entity = {}
+        for gname, gnodes in list(entity_groups.items()):
+            if not (gname.startswith("VM:") or gname.startswith("VG:")):
+                continue
+            for n in gnodes:
+                if is_live_vdisk(n) and n.get("chain_id"):
+                    cid = str(n.get("chain_id"))
+                    chain_live_entity[cid] = prefer_live_entity_name(chain_live_entity.get(cid), gname)
+        snap_nodes = list(entity_groups.get("Snapshots", []))
+        remaining_snaps = []
+        for n in snap_nodes:
+            cid = str(n.get("chain_id") or "").strip()
+            owner = chain_live_entity.get(cid)
+            if owner:
+                n["mapped_entity_name"] = owner
+                n["classification_reason"] = "same_chain_snapshot_under_live_entity"
+                entity_groups.setdefault(owner, []).append(n)
+            else:
+                remaining_snaps.append(n)
+        if remaining_snaps:
+            entity_groups["Snapshots"] = remaining_snaps
+        elif "Snapshots" in entity_groups:
+            del entity_groups["Snapshots"]
+
+        container_ratios = get_data_reduction_ratios(data_reduction_ratios, c.get("id_short"))
+        container_compression = normalize_compression_ratio(container_ratios.get("compression"))
+
+        # Base Share per live chain under each VM/VG folder.
+        for gname, gnodes in list(entity_groups.items()):
+            if not (gname.startswith("VM:") or gname.startswith("VG:")):
+                continue
+            live_chains = sorted({
+                str(n.get("chain_id"))
+                for n in gnodes
+                if is_live_vdisk(n) and n.get("chain_id")
+            })
+            for cid in live_chains:
+                chain_vids = chain_to_vdisk_ids.get(cid, [])
+                computed = compute_base_share(
+                    cid,
+                    chain_vids,
+                    chain_usage_map,
+                    curator_usage_map,
+                    vdisk_lookup=vdisk_by_id,
+                    replication_factor=replication_factor,
+                    compression_ratio=container_compression,
+                )
+                gnodes.append(
+                    build_base_share_leaf(
+                        cid, chain_vids, computed, c_name, mapped_entity_name=gname
+                    )
+                )
+            entity_groups[gname] = gnodes
+
+        def _entity_child_sort_key(x):
+            if x.get("is_base_share_block"):
+                kind = 2
+            elif x.get("is_snapshot") or ("Immutable" in str(x.get("mutability_state", "") or "")):
+                kind = 1
+            else:
+                kind = 0
+            return (kind, -abs(int(x.get("real_bytes", 0) or 0)), str(x.get("name", "")))
+
         for group_nodes in entity_groups.values():
-            group_nodes.sort(key=lambda x: x.get("real_bytes", 0), reverse=True)
+            group_nodes.sort(key=_entity_child_sort_key)
 
         shared_storage_nodes = []
         for pvid, info in shared_root_nodes.items():
             max_curator_shared_est = int(info.get("max_curator_shared_estimated_bytes", 0))
-            primary_shared = int(info.get("max_primary_shared_bytes", 0))
+            logical_clone = int((info.get("shared_formula_terms") or {}).get("logical_shared_clone", 0) or 0)
+            if logical_clone <= 0:
+                logical_clone = int(info.get("max_primary_shared_bytes", 0) or 0)
+            primary_shared = physical_shared_storage_bytes(
+                logical_clone, replication_factor, container_compression
+            )
+            if primary_shared <= 0:
+                continue
             is_dummy_root = bool(info.get("is_dummy_lineage_root"))
             parent_vd = {} if is_dummy_root else vdisk_by_id.get(pvid, {})
             parent_container_id = parent_vd.get("container_id", c.get("id_short"))
@@ -939,6 +1122,13 @@ def process_container_centric_logs(sections: dict):
             anchor_vdisk_id = str(info.get("anchor_vdisk_id") or "")
             node_name = f"Lineage Root VDisk-Chain-{root_chain_id}" if is_dummy_root else f"Lineage Root VDisk-{pvid}"
             node_vdisk_id = anchor_vdisk_id if is_dummy_root else pvid
+            formula_terms = dict(info.get("shared_formula_terms") or {})
+            formula_terms.update({
+                "logical_shared_clone": logical_clone,
+                "replication_factor": replication_factor,
+                "compression_ratio": container_compression,
+                "physical_shared_storage": primary_shared,
+            })
             shared_storage_nodes.append({
                 **parent_vd,
                 "name": node_name,
@@ -950,11 +1140,14 @@ def process_container_centric_logs(sections: dict):
                 "lineage_role": ("root" if is_dummy_root else lineage_role(pvid)),
                 "value": primary_shared if primary_shared > 0 else 1,
                 "real_bytes": primary_shared,
-                "display_source": str(info.get("shared_formula_source") or "curator_chain_x2"),
+                "display_source": "logical_shared_clone_x_rf_div_compression",
                 "shared_storage_bytes": primary_shared,
                 "shared_storage_curator_estimated_bytes": max_curator_shared_est,
-                "shared_formula_source": info.get("shared_formula_source"),
-                "shared_formula_terms": info.get("shared_formula_terms", {}),
+                "shared_storage_mode": "physical",
+                "shared_formula_source": "logical_shared_clone_x_rf_div_compression",
+                "shared_formula_terms": formula_terms,
+                "replication_factor": replication_factor,
+                "compression_ratio": container_compression,
                 "formatted_size": format_bytes(primary_shared),
                 "formatted_shared_storage": format_bytes(primary_shared),
                 "formatted_inherited_usage": format_bytes(max_curator_shared_est),
@@ -1038,12 +1231,14 @@ def process_container_centric_logs(sections: dict):
         shared_storage_total = sum(n.get("real_bytes", 0) for n in shared_storage_nodes)
 
         container_children = []
+        c_total = 0
         for group_name, group_nodes in entity_groups.items():
             group_total = sum(int(v.get("real_bytes", 0) or 0) for v in group_nodes)
+            c_total += group_total
             container_children.append({
                 "name": group_name,
                 "aggregate_exclusive_bytes": group_total,
-                "formatted_size": format_bytes(group_total),
+                "formatted_size": format_signed_bytes(group_total),
                 "children": group_nodes
             })
         explicit_res_bytes = int(c.get("explicit_res_logical_bytes", 0) or 0)
@@ -1058,7 +1253,7 @@ def process_container_centric_logs(sections: dict):
 
         # Container reservation residual:
         # Explicit Reserved(Logical)*ReplicationFactor minus all other consumers in the container.
-        # Thick provisioned vdisks are already included in c_total at vdisk level.
+        # Includes live/snapshot exclusive + Base Share under VM/VG folders.
         other_container_total = c_total + shared_storage_total
         explicit_residual_bytes = explicit_res_scaled_bytes - other_container_total
         if explicit_residual_bytes > 0:
@@ -1247,26 +1442,28 @@ def process_container_chain_graph_logs(sections: dict):
                 chain_to_vdisk_ids[cid].append(vid)
 
     def compute_chain_shared_usage(chain_id: str, chain_vdisk_ids: list):
-        """Compute shared usage for one chain. Caller applies family-level preconditions."""
+        """Collect chain clone stats. Physical Shared Storage is applied later with container RF/compression."""
         stats = chain_usage_map.get(chain_id, {})
         logical_live = int(stats.get("logical_live", 0) or 0)
         logical_clone = int(stats.get("logical_shared_clone", 0) or 0)
+        logical_exclusive = int(stats.get("logical_exclusive", 0) or 0)
         logical_exclusive_snapshot = int(stats.get("logical_exclusive_snapshot", 0) or 0)
         physical_peg = int(stats.get("physical_peg", 0) or 0)
         exclusive_sum = sum(int(usage_map.get(str(vd_id), 0) or 0) for vd_id in chain_vdisk_ids)
         if logical_clone > 0:
-            shared_bytes = (logical_clone * 2)
-            source = "curator_chain_x2"
+            # Placeholder ranking key = logical clone; Physical conversion happens at emit time.
+            shared_bytes = logical_clone
+            source = "logical_shared_clone_pending_physical"
         elif len(chain_vdisk_ids) <= 1:
             shared_bytes = 0
             source = "single_vdisk_zero_clone_no_shared"
         else:
-            # Snapshot-chain leftover is owned by Chain Snap Share; do not count it here.
             shared_bytes = 0
-            source = "zero_clone_use_chain_snap_share"
+            source = "zero_logical_shared_clone"
         return {
             "logical_live": logical_live,
             "logical_shared_clone": logical_clone,
+            "logical_exclusive": logical_exclusive,
             "logical_exclusive_snapshot": logical_exclusive_snapshot,
             "physical_peg": physical_peg,
             "exclusive_sum": exclusive_sum,
@@ -1353,6 +1550,7 @@ def process_container_chain_graph_logs(sections: dict):
         elif is_to_remove:
             entity_type, entity_name = "pending_deletion", "Pending Deletion (to_remove)"
         elif is_snapshot:
+            # Provisional; reassigned below to VM/VG when same-chain live exists.
             entity_type, entity_name = "snapshot", "Snapshots"
         elif vm_name:
             entity_type, entity_name = "vm", f"VM: {vm_name}"
@@ -1375,6 +1573,34 @@ def process_container_chain_graph_logs(sections: dict):
             is_to_remove=is_to_remove,
             is_in_recycle_bin=is_in_recycle_bin,
         )
+
+    # Map each chain to the VM/VG that owns its live vdisk(s). Same-chain snapshots
+    # attach under that folder; Snapshots/Other groups keep unmapped disks only.
+    chain_live_entity = {}
+    for vnode in vdisk_nodes.values():
+        if vnode.is_snapshot or vnode.is_in_recycle_bin or vnode.is_to_remove:
+            continue
+        if not vnode.chain_id:
+            continue
+        if vnode.entity_name.startswith("VM:") or vnode.entity_name.startswith("VG:"):
+            chain_live_entity[vnode.chain_id] = prefer_live_entity_name(
+                chain_live_entity.get(vnode.chain_id), vnode.entity_name
+            )
+
+    for vnode in vdisk_nodes.values():
+        if not vnode.is_snapshot or vnode.is_in_recycle_bin or vnode.is_to_remove:
+            continue
+        owner = chain_live_entity.get(vnode.chain_id)
+        if owner:
+            vnode.entity_name = owner
+            vnode.entity_type = "vm" if owner.startswith("VM:") else "vg"
+            if owner.startswith("VM:"):
+                vnode.vm_name = owner[4:].strip() or vnode.vm_name
+            elif owner.startswith("VG:"):
+                vnode.vg_name = owner[4:].strip() or vnode.vg_name
+        else:
+            vnode.entity_type = "snapshot"
+            vnode.entity_name = "Snapshots"
 
     # Chain trees: root by chain_id where no parent chain exists.
     roots = [cid for cid, node in chain_nodes.items() if not node.parent_chain_ids]
@@ -1433,12 +1659,29 @@ def process_container_chain_graph_logs(sections: dict):
             node.shared_formula_terms = {
                 "logical_live": int(computed["logical_live"]),
                 "logical_shared_clone": int(computed["logical_shared_clone"]),
+                "logical_exclusive": int(computed.get("logical_exclusive", 0) or 0),
                 "physical_peg": int(computed["physical_peg"]),
                 "exclusive_sum": int(computed["exclusive_sum"]),
             }
 
-        leaf_candidates = [{"chain_id": cid, "shared_bytes": int(chain_nodes[cid].shared_bytes)} for cid in leaves]
-        selected = max(leaf_candidates, key=lambda x: x["shared_bytes"]) if leaf_candidates else {"chain_id": None, "shared_bytes": 0}
+        # Family Shared Storage key = max(logical_shared_clone) across all member chains.
+        family_candidates = [
+            {
+                "chain_id": cid,
+                "logical_shared_clone": int(chain_nodes[cid].logical_shared_clone or 0),
+                "shared_bytes": int(chain_nodes[cid].logical_shared_clone or 0),
+            }
+            for cid in members
+        ]
+        selected = (
+            max(family_candidates, key=lambda x: (x["logical_shared_clone"], x["chain_id"] or ""))
+            if family_candidates
+            else {"chain_id": None, "shared_bytes": 0, "logical_shared_clone": 0}
+        )
+        leaf_candidates = [
+            {"chain_id": cid, "shared_bytes": int(chain_nodes[cid].logical_shared_clone or 0)}
+            for cid in leaves
+        ]
         chain_trees.append(
             ChainTree(
                 chain_tree_id=f"chain-tree-{root_chain_id}",
@@ -1446,7 +1689,7 @@ def process_container_chain_graph_logs(sections: dict):
                 member_chain_ids=sorted(members),
                 leaf_chain_ids=sorted(leaves),
                 selected_shared_chain_id=selected.get("chain_id"),
-                selected_shared_bytes=int(selected.get("shared_bytes", 0)),
+                selected_shared_bytes=int(selected.get("logical_shared_clone", 0) or 0),
                 leaf_candidates=leaf_candidates,
             )
         )
@@ -1493,9 +1736,13 @@ def process_container_chain_graph_logs(sections: dict):
         container_children = []
         c_total = 0
 
+        container_ratios = get_data_reduction_ratios(data_reduction_ratios, container_id)
+        container_compression = normalize_compression_ratio(container_ratios.get("compression"))
+
         for group_name, group_vdisk_ids in cg.entity_groups.items():
             group_nodes = []
             group_total = 0
+            live_chains_in_group = set()
             for vid in group_vdisk_ids:
                 vd = vdisk_by_id.get(vid, {})
                 vnode = vdisk_nodes.get(vid)
@@ -1509,6 +1756,12 @@ def process_container_chain_graph_logs(sections: dict):
                 primary_usage = thick_scaled if thick_raw > 0 else vnode.exclusive_bytes
                 group_total += primary_usage
                 c_total += primary_usage
+                if (
+                    (group_name.startswith("VM:") or group_name.startswith("VG:"))
+                    and vnode.chain_id
+                    and is_live_vdisk(vnode)
+                ):
+                    live_chains_in_group.add(str(vnode.chain_id))
                 group_nodes.append({
                     **vd,
                     "name": str(vid),
@@ -1519,6 +1772,7 @@ def process_container_chain_graph_logs(sections: dict):
                     "is_thick_prov_vdisk": thick_raw > 0,
                     "thick_prov_raw_bytes": thick_raw,
                     "thick_prov_vdisk_bytes": thick_scaled,
+                    "is_snapshot": vnode.is_snapshot,
                     "is_in_recycle_bin": vnode.is_in_recycle_bin,
                     "mapped_vm_name": vnode.vm_name,
                     "mapped_vg_name": vnode.vg_name,
@@ -1534,7 +1788,11 @@ def process_container_chain_graph_logs(sections: dict):
                         "lineage_role": lineage_role(vnode.vdisk_id),
                     },
                     "chain_stats": {
-                        "logical_exclusive": int(chain_node.shared_formula_terms.get("exclusive_sum", 0) or 0),
+                        "logical_exclusive": int(
+                            (chain_node.shared_formula_terms or {}).get("logical_exclusive", 0)
+                            or chain_usage_map.get(str(vnode.chain_id), {}).get("logical_exclusive", 0)
+                            or 0
+                        ),
                         "logical_live": int(chain_node.logical_live or 0),
                         "logical_shared_clone": int(chain_node.logical_shared_clone or 0),
                         "logical_exclusive_snapshot": int(chain_node.logical_exclusive_snapshot or 0),
@@ -1543,11 +1801,41 @@ def process_container_chain_graph_logs(sections: dict):
                     "shared_formula_source": chain_node.shared_formula_source,
                     "shared_formula_terms": chain_node.shared_formula_terms,
                 })
-            group_nodes.sort(key=lambda x: int(x.get("real_bytes", 0) or 0), reverse=True)
+
+            # Under each VM/VG: Base Share per chain that has a live vdisk in this folder.
+            if group_name.startswith("VM:") or group_name.startswith("VG:"):
+                for cid in sorted(live_chains_in_group):
+                    chain_vids = chain_to_vdisk_ids.get(cid, [])
+                    computed = compute_base_share(
+                        cid,
+                        chain_vids,
+                        chain_usage_map,
+                        usage_map,
+                        vdisk_lookup=vdisk_nodes,
+                        replication_factor=cg.replication_factor,
+                        compression_ratio=container_compression,
+                    )
+                    leaf = build_base_share_leaf(
+                        cid, chain_vids, computed, cg.container_name, mapped_entity_name=group_name
+                    )
+                    group_nodes.append(leaf)
+                    group_total += int(leaf.get("real_bytes", 0) or 0)
+                    c_total += int(leaf.get("real_bytes", 0) or 0)
+
+            def _vm_vg_child_sort_key(x):
+                if x.get("is_base_share_block"):
+                    kind = 2
+                elif x.get("is_snapshot") or ("Immutable" in str(x.get("mutability_state", "") or "")):
+                    kind = 1
+                else:
+                    kind = 0
+                return (kind, -abs(int(x.get("real_bytes", 0) or 0)), str(x.get("name", "")))
+
+            group_nodes.sort(key=_vm_vg_child_sort_key)
             container_children.append({
                 "name": group_name,
                 "aggregate_exclusive_bytes": group_total,
-                "formatted_size": format_bytes(group_total),
+                "formatted_size": format_signed_bytes(group_total),
                 "children": group_nodes,
             })
 
@@ -1558,28 +1846,39 @@ def process_container_chain_graph_logs(sections: dict):
             if not selected_chain_id:
                 continue
             selected_chain = chain_nodes.get(selected_chain_id)
-            if not selected_chain or selected_chain.shared_bytes <= 0:
+            if not selected_chain:
                 continue
 
             # lineage_id is the unique shared-storage identifier / highlight key.
             lineage_id = None
+            family_max_clone = 0
             for cid in (tree.member_chain_ids or []):
-                for vid in chain_nodes.get(cid, ChainNode(chain_id=cid)).vdisk_ids:
+                member = chain_nodes.get(cid, ChainNode(chain_id=cid))
+                family_max_clone = max(family_max_clone, int(member.logical_shared_clone or 0))
+                for vid in member.vdisk_ids:
                     vd = vdisk_by_id.get(str(vid), {})
                     lid = str(vd.get("lineage_id") or "").strip()
-                    if lid:
+                    if lid and not lineage_id:
                         lineage_id = lid
-                        break
-                if lineage_id:
-                    break
             if not lineage_id:
                 lineage_id = str(selected_chain_id)
+            if family_max_clone <= 0:
+                continue
 
-            shared_clone_usage = int(
-                (selected_chain.shared_formula_terms or {}).get("logical_shared_clone", 0)
-                or selected_chain.logical_shared_clone
-                or 0
+            shared_clone_usage = int(family_max_clone)
+            physical_shared = physical_shared_storage_bytes(
+                shared_clone_usage, cg.replication_factor, container_compression
             )
+            if physical_shared <= 0:
+                continue
+            formula_terms = dict(selected_chain.shared_formula_terms or {})
+            formula_terms.update({
+                "logical_shared_clone": shared_clone_usage,
+                "family_max_logical_shared_clone": shared_clone_usage,
+                "replication_factor": cg.replication_factor,
+                "compression_ratio": container_compression,
+                "physical_shared_storage": physical_shared,
+            })
             candidate = {
                 "name": lineage_id,
                 # Synthetic aggregate node: do not reuse a real vdisk_id.
@@ -1593,21 +1892,24 @@ def process_container_chain_graph_logs(sections: dict):
                 "leaf_chain_ids": tree.leaf_chain_ids,
                 "leaf_candidates": tree.leaf_candidates,
                 "selected_shared_chain_id": selected_chain_id,
-                "selected_shared_bytes": int(tree.selected_shared_bytes),
+                "selected_shared_bytes": physical_shared,
                 "is_shared_parent_vdisk": True,
                 "is_dummy_lineage_root": False,
-                "value": int(tree.selected_shared_bytes),
-                "real_bytes": int(tree.selected_shared_bytes),
-                "shared_storage_bytes": int(tree.selected_shared_bytes),
-                "shared_storage_curator_estimated_bytes": int(tree.selected_shared_bytes),
-                "shared_formula_source": selected_chain.shared_formula_source,
-                "shared_formula_terms": selected_chain.shared_formula_terms,
-                "display_source": selected_chain.shared_formula_source,
-                "formatted_size": format_bytes(int(tree.selected_shared_bytes)),
+                "value": physical_shared,
+                "real_bytes": physical_shared,
+                "shared_storage_bytes": physical_shared,
+                "shared_storage_curator_estimated_bytes": physical_shared,
+                "shared_storage_mode": "physical",
+                "shared_formula_source": "logical_shared_clone_x_rf_div_compression",
+                "shared_formula_terms": formula_terms,
+                "display_source": "logical_shared_clone_x_rf_div_compression",
+                "replication_factor": cg.replication_factor,
+                "compression_ratio": container_compression,
+                "formatted_size": format_bytes(physical_shared),
                 "container_name": cg.container_name,
             }
 
-            # Same lineage_id: keep max shared-clone usage.
+            # Same lineage_id: keep max shared-clone usage (Physical sized).
             existing = shared_by_family_key.get(lineage_id)
             if existing is None:
                 shared_by_family_key[lineage_id] = candidate
@@ -1630,35 +1932,6 @@ def process_container_chain_graph_logs(sections: dict):
                 "aggregate_exclusive_bytes": shared_total,
                 "formatted_size": format_bytes(shared_total),
                 "children": shared_storage_nodes,
-            })
-
-        snap_share_nodes = []
-        seen_snap_chains = set()
-        for vid in cg.vdisk_ids:
-            vnode = vdisk_nodes.get(str(vid))
-            if not vnode or not vnode.chain_id:
-                continue
-            cid = str(vnode.chain_id)
-            if cid in seen_snap_chains:
-                continue
-            seen_snap_chains.add(cid)
-            chain_vids = chain_to_vdisk_ids.get(cid, [])
-            computed = compute_chain_snap_share(
-                cid, chain_vids, chain_usage_map, usage_map, vdisk_lookup=vdisk_nodes
-            )
-            if int(computed.get("snap_share", 0) or 0) <= 0:
-                continue
-            snap_share_nodes.append(
-                build_chain_snap_share_leaf(cid, chain_vids, computed, cg.container_name)
-            )
-        snap_share_nodes.sort(key=lambda x: int(x.get("real_bytes", 0) or 0), reverse=True)
-        snap_share_total = sum(int(n.get("real_bytes", 0) or 0) for n in snap_share_nodes)
-        if snap_share_nodes:
-            container_children.append({
-                "name": "Chain Snap Share",
-                "aggregate_exclusive_bytes": snap_share_total,
-                "formatted_size": format_bytes(snap_share_total),
-                "children": snap_share_nodes,
             })
 
         garbage_info = garbage_map.get(str(container_id), {}) or {}
@@ -1699,7 +1972,7 @@ def process_container_chain_graph_logs(sections: dict):
 
         explicit_res_bytes = int(c.get("explicit_res_logical_bytes", 0) or 0)
         explicit_res_scaled_bytes = explicit_res_bytes * cg.replication_factor
-        other_total = c_total + shared_total + snap_share_total
+        other_total = c_total + shared_total
         explicit_residual_bytes = explicit_res_scaled_bytes - other_total
         if explicit_residual_bytes > 0:
             container_children.append({
@@ -1903,23 +2176,26 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
         physical_peg = stats.get("physical_peg", 0)
         chain_vdisks = set(c_node.get("vdisk_ids", []))
         exclusive_sum = sum(int(usage_map.get(str(vd_id), 0) or 0) for vd_id in chain_vdisks)
+        c_id = c_node.get("container_id") or "Unknown"
+        rf = normalize_replication_factor(ctr_rf_by_id.get(str(c_id), 2))
+        compression = normalize_compression_ratio(
+            get_data_reduction_ratios(data_reduction_ratios, c_id).get("compression")
+        )
         if logical_clone > 0:
-            shared_size = (logical_clone * 2)
-            shared_formula_source = "curator_chain_x2"
+            shared_size = physical_shared_storage_bytes(logical_clone, rf, compression)
+            shared_formula_source = "logical_shared_clone_x_rf_div_compression"
         elif len(chain_vdisks) <= 1:
             shared_size = 0
             shared_formula_source = "single_vdisk_zero_clone_no_shared"
         else:
-            # Snapshot-chain leftover is owned by Chain Snap Share; do not count it here.
             shared_size = 0
-            shared_formula_source = "zero_clone_use_chain_snap_share"
+            shared_formula_source = "zero_logical_shared_clone"
         if shared_size <= 0:
             continue
 
         shared_family_chain_ids.add(cid)
         shared_family_vdisks.update(chain_vdisks)
 
-        c_id = c_node.get("container_id") or "Unknown"
         c_name = ctr_map.get(str(c_id), f"Container-{c_id}")
         if c_name not in container_shared_nodes:
             container_shared_nodes[c_name] = []
@@ -1937,12 +2213,18 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
             "logical_clone_bytes": logical_clone,
             "logical_live_bytes": logical_live,
             "total_physical_peg_bytes": physical_peg,
+            "shared_storage_mode": "physical",
+            "replication_factor": rf,
+            "compression_ratio": compression,
             "shared_formula_source": shared_formula_source,
             "shared_formula_terms": {
                 "logical_live": logical_live,
                 "logical_shared_clone": int(logical_clone or 0),
                 "physical_peg": int(physical_peg or 0),
                 "exclusive_sum": int(exclusive_sum),
+                "replication_factor": rf,
+                "compression_ratio": compression,
+                "physical_shared_storage": shared_size,
             },
             "formatted_size": format_bytes(shared_size),
             "formatted_logical_clone": format_bytes(logical_clone),
@@ -1951,24 +2233,11 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
             "vdisk_ids": sorted(list(chain_vdisks))
         })
 
-    container_snap_share_nodes = {}
     vdisk_lookup_by_id = {
         str(vd.get("vdisk_id")): vd
         for vd in vdisks
         if vd.get("vdisk_id") is not None
     }
-    for cid, c_node in chains.items():
-        chain_vdisks = list(c_node.get("vdisk_ids", []))
-        computed = compute_chain_snap_share(
-            cid, chain_vdisks, chain_usage_map, usage_map, vdisk_lookup=vdisk_lookup_by_id
-        )
-        if int(computed.get("snap_share", 0) or 0) <= 0:
-            continue
-        c_id = c_node.get("container_id") or "Unknown"
-        c_name = ctr_map.get(str(c_id), f"Container-{c_id}")
-        container_snap_share_nodes.setdefault(c_name, []).append(
-            build_chain_snap_share_leaf(cid, chain_vdisks, computed, c_name)
-        )
 
     # --- STEP 3: Exclusive VDisk Usage Calculation ---
     container_tree = {}
@@ -2035,6 +2304,7 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
             "value": exclusive_bytes if exclusive_bytes > 0 else NOMINAL_LAYOUT_BYTES,
             "real_bytes": exclusive_bytes,
             "formatted_size": format_bytes(exclusive_bytes),
+            "is_snapshot": is_snapshot,
             "is_in_recycle_bin": is_in_recycle_bin,
             "mapped_vm_name": mapped_vm,
             "mapped_vg_name": mapped_vg,
@@ -2043,9 +2313,71 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
         })
         container_tree[c_name][mapped_entity].append(node_data)
 
+    # Attach same-chain snapshots under VM/VG; Snapshots/Other stay unmapped-only.
+    chain_to_vdisk_ids_legacy = {}
+    for vd in vdisks:
+        cid = str(vd.get("chain_id") or "").strip()
+        vid = str(vd.get("vdisk_id") or "").strip()
+        if cid and vid:
+            chain_to_vdisk_ids_legacy.setdefault(cid, []).append(vid)
+
+    for c_name, entities in list(container_tree.items()):
+        chain_live_entity = {}
+        for gname, gnodes in entities.items():
+            if not (gname.startswith("VM:") or gname.startswith("VG:")):
+                continue
+            for n in gnodes:
+                if is_live_vdisk(n) and n.get("chain_id"):
+                    cid = str(n.get("chain_id"))
+                    chain_live_entity[cid] = prefer_live_entity_name(chain_live_entity.get(cid), gname)
+        snaps = list(entities.get("Snapshots", []))
+        remaining = []
+        for n in snaps:
+            owner = chain_live_entity.get(str(n.get("chain_id") or "").strip())
+            if owner:
+                n["mapped_entity_name"] = owner
+                entities.setdefault(owner, []).append(n)
+            else:
+                remaining.append(n)
+        if remaining:
+            entities["Snapshots"] = remaining
+        elif "Snapshots" in entities:
+            del entities["Snapshots"]
+
+        c_id = ctr_name_to_id.get(c_name)
+        rf = normalize_replication_factor(ctr_rf_by_id.get(str(c_id), 2) if c_id is not None else 2)
+        compression = normalize_compression_ratio(
+            get_data_reduction_ratios(data_reduction_ratios, c_id).get("compression")
+        )
+        for gname, gnodes in list(entities.items()):
+            if not (gname.startswith("VM:") or gname.startswith("VG:")):
+                continue
+            live_chains = sorted({
+                str(n.get("chain_id"))
+                for n in gnodes
+                if is_live_vdisk(n) and n.get("chain_id")
+            })
+            for cid in live_chains:
+                chain_vids = chain_to_vdisk_ids_legacy.get(cid, [])
+                computed = compute_base_share(
+                    cid,
+                    chain_vids,
+                    chain_usage_map,
+                    usage_map,
+                    vdisk_lookup=vdisk_lookup_by_id,
+                    replication_factor=rf,
+                    compression_ratio=compression,
+                )
+                gnodes.append(
+                    build_base_share_leaf(
+                        cid, chain_vids, computed, c_name, mapped_entity_name=gname
+                    )
+                )
+            entities[gname] = gnodes
+
     # --- STEP 4: Aggregate Final JSON Payload ---
     container_nodes = []
-    all_c_names = set(container_tree.keys()).union(container_shared_nodes.keys()).union(container_snap_share_nodes.keys())
+    all_c_names = set(container_tree.keys()).union(container_shared_nodes.keys())
 
     for c_name in all_c_names:
         entities = container_tree.get(c_name, {})
@@ -2055,9 +2387,6 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
         shared_clone_blocks = container_shared_nodes.get(c_name, [])
         if shared_clone_blocks:
             entities["Shared Clones"] = shared_clone_blocks
-        snap_share_blocks = container_snap_share_nodes.get(c_name, [])
-        if snap_share_blocks:
-            entities["Chain Snap Share"] = snap_share_blocks
 
         c_id = ctr_name_to_id.get(c_name)
         garbage_info = garbage_map.get(str(c_id), {}) or {} if c_id is not None else {}
