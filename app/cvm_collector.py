@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 collector_timing = {}
 
 def emit_progress(step_num, message):
-    print("===PROGRESS:%s/8:%s===" % (step_num, message))
+    print("===PROGRESS:%s/9:%s===" % (step_num, message))
     sys.stdout.flush()
 
 def run_cmd(cmd, timeout_sec=60):
@@ -192,6 +192,10 @@ t0 = time.time()
 emit_progress(6, "Querying curator garbage report...")
 curator_garbage_out = run_binary("curator_cli display_garbage_report", timeout_sec=180)
 collector_timing["curator_garbage_sec"] = round(time.time() - t0, 3)
+t0 = time.time()
+emit_progress(7, "Querying curator data reduction report...")
+curator_data_reduction_out = run_binary("curator_cli display_data_reduction_report", timeout_sec=180)
+collector_timing["curator_data_reduction_sec"] = round(time.time() - t0, 3)
 collector_timing["container_count"] = len(container_names)
 collector_timing["vdisk_count"] = len(raw_vdisk_ids)
 collector_timing["chain_count"] = len(raw_chain_ids)
@@ -200,7 +204,7 @@ collector_timing["skip_nfs_ls"] = True
 collector_timing["collector_workers"] = {"curator": CURATOR_WORKERS}
 collector_timing["collector_chunk"] = {"vdisk": CURATOR_VDISK_CHUNK, "chain": CURATOR_CHAIN_CHUNK, "retry": CURATOR_RETRY_CHUNK}
 
-emit_progress(7, "Finalizing live scan output...")
+emit_progress(8, "Finalizing live scan output...")
 print("===VDISK_CFG_START===")
 print(vdisk_cfg)
 print("===NCLI_SP_START===")
@@ -217,9 +221,11 @@ print("===CURATOR_CHAIN_USAGE_START===")
 print(curator_chain_out)
 print("===CURATOR_GARBAGE_START===")
 print(curator_garbage_out)
+print("=== CURATOR_DATA_REDUCTION_REPORT ===")
+print(curator_data_reduction_out)
 print("===COLLECTOR_TIMING_START===")
 print(json.dumps(collector_timing))
-emit_progress(8, "DONE: live CVM scan complete.")
+emit_progress(9, "DONE: live CVM scan complete.")
 print("===COLLECTOR_OUTPUT_COMPLETE===")
 sys.stdout.flush()
 """
@@ -302,6 +308,7 @@ sys.stdout.flush()
                 "===CURATOR_START===",
                 "===CURATOR_CHAIN_USAGE_START===",
                 "===CURATOR_GARBAGE_START===",
+                "=== CURATOR_DATA_REDUCTION_REPORT ===",
                 "===COLLECTOR_TIMING_START===",
                 "===COLLECTOR_OUTPUT_COMPLETE===",
             ]

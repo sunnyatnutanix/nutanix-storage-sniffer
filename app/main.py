@@ -18,6 +18,8 @@ from app.parser import (
     parse_curator_usage,
     parse_curator_chain_usage,
     parse_curator_garbage_report,
+    parse_curator_data_reduction_report,
+    get_data_reduction_ratios,
     parse_ncli_vms,
     parse_ncli_volume_groups,
     parse_ncli_storage_pool,
@@ -287,7 +289,8 @@ def extract_log_sections(raw_output: str) -> dict:
         "===VDISK_CFG_START===", "===NCLI_VM_START===", "===NCLI_VG_START===",
         "===NCLI_SP_START===", "===NCLI_CTR_START===", "===SNAPSHOT_TREE_START===",
         "===SNAPSHOT_TREE_CHAIN_IDS_START===", "===CURATOR_START===", "===CURATOR_CHAIN_USAGE_START===",
-        "===CURATOR_GARBAGE_START===", "===NFS_LS_START===", "===COLLECTOR_TIMING_START===",
+        "===CURATOR_GARBAGE_START===", "=== CURATOR_DATA_REDUCTION_REPORT ===",
+        "===NFS_LS_START===", "===COLLECTOR_TIMING_START===",
     ]
     sections = {h: "" for h in headers}
     found_headers = []
@@ -367,6 +370,9 @@ def process_container_centric_logs(sections: dict):
     nfs_detailed_map = parse_nfs_ls_sections_detailed(nfs_raw_section)
     curator_usage_map = parse_curator_usage(sections.get("===CURATOR_START===", ""))
     chain_usage_map = parse_curator_chain_usage(sections.get("===CURATOR_CHAIN_USAGE_START===", ""))
+    data_reduction_ratios = parse_curator_data_reduction_report(
+        sections.get("=== CURATOR_DATA_REDUCTION_REPORT ===", "")
+    )
     vdisk_by_nfs = parse_vdisk_map_by_nfs(vdisks)
     valid_nfs_names = {str(vd.get("nfs_file_name")).strip() for vd in vdisks if vd.get("nfs_file_name")}
     sp_info = parse_ncli_storage_pool(sections.get("===NCLI_SP_START===", ""))
@@ -1102,6 +1108,9 @@ def process_container_centric_logs(sections: dict):
             "thick_prov_logical": c.get("thick_prov_logical"),
             "thick_prov_logical_bytes": c.get("thick_prov_logical_bytes", 0),
             "replication_factor": replication_factor,
+            "dataReductionRatios": get_data_reduction_ratios(
+                data_reduction_ratios, c.get("id_short")
+            ),
             "children": container_children
         }
         container_nodes.append(container_node)
@@ -1115,6 +1124,7 @@ def process_container_centric_logs(sections: dict):
     return {
         "status": "success",
         "collector_timing": collector_timing,
+        "dataReductionRatios": data_reduction_ratios,
         "tree": {
             "name": f"Storage Pool: {sp_info.get('name', 'Nutanix_SP')}",
             "formatted_size": format_bytes(sp_capacity),
@@ -1201,6 +1211,9 @@ def process_container_chain_graph_logs(sections: dict):
     usage_map = parse_curator_usage(sections.get("===CURATOR_START===", ""))
     chain_usage_map = parse_curator_chain_usage(sections.get("===CURATOR_CHAIN_USAGE_START===", ""))
     garbage_map = parse_curator_garbage_report(sections.get("===CURATOR_GARBAGE_START===", ""))
+    data_reduction_ratios = parse_curator_data_reduction_report(
+        sections.get("=== CURATOR_DATA_REDUCTION_REPORT ===", "")
+    )
     sp_info = parse_ncli_storage_pool(sections.get("===NCLI_SP_START===", ""))
 
     vm_by_vdisk_id = {}
@@ -1729,6 +1742,9 @@ def process_container_chain_graph_logs(sections: dict):
             "thick_prov_logical": c.get("thick_prov_logical"),
             "thick_prov_logical_bytes": c.get("thick_prov_logical_bytes", 0),
             "replication_factor": cg.replication_factor,
+            "dataReductionRatios": get_data_reduction_ratios(
+                data_reduction_ratios, container_id
+            ),
             "entity_groups": [{"name": n, "vdisk_ids": ids} for n, ids in cg.entity_groups.items()],
             "chain_trees": [t.__dict__ for t in cg.chain_trees],
             "children": container_children,
@@ -1743,6 +1759,7 @@ def process_container_chain_graph_logs(sections: dict):
         "status": "success",
         "collector_timing": collector_timing,
         "model_version": "chain_v2",
+        "dataReductionRatios": data_reduction_ratios,
         "tree": {
             "name": f"Storage Pool: {sp_info.get('name', 'Nutanix_SP')}",
             "formatted_size": format_bytes(sp_capacity),
@@ -1784,8 +1801,17 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
     vgs = parse_ncli_volume_groups(sections.get("===NCLI_VG_START===", ""))
     ctr_map = parse_ncli_containers(sections.get("===NCLI_CTR_START===", ""))
     ctr_name_to_id = {v: k for k, v in ctr_map.items()}
+    ctr_detailed = parse_ncli_containers_detailed(sections.get("===NCLI_CTR_START===", ""))
+    ctr_rf_by_id = {
+        str(c.get("id_short")): int(c.get("replication_factor") or 2)
+        for c in ctr_detailed
+        if c.get("id_short") is not None
+    }
     sp_info = parse_ncli_storage_pool(sections.get("===NCLI_SP_START===", ""))
     garbage_map = parse_curator_garbage_report(sections.get("===CURATOR_GARBAGE_START===", ""))
+    data_reduction_ratios = parse_curator_data_reduction_report(
+        sections.get("=== CURATOR_DATA_REDUCTION_REPORT ===", "")
+    )
 
 
     disk_uuid_to_vg = {}
@@ -2085,12 +2111,17 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
             )
         )
 
+        legacy_cid = ctr_name_to_id.get(c_name)
         container_nodes.append({
             "name": c_name,
-            "container_id": ctr_name_to_id.get(c_name),
+            "container_id": legacy_cid,
             "container_vdisk_count": len(container_vdisk_ids),
             "aggregate_exclusive_bytes": c_total_exclusive,
             "formatted_size": format_bytes(c_total_exclusive),
+            "replication_factor": ctr_rf_by_id.get(str(legacy_cid), 2) if legacy_cid is not None else 2,
+            "dataReductionRatios": get_data_reduction_ratios(
+                data_reduction_ratios, legacy_cid
+            ),
             "children": e_nodes
         })
 
@@ -2109,6 +2140,7 @@ def process_raw_logs(raw_output: str, run_id: str = "run-unknown"):
     return {
         "status": "success", 
         "collector_timing": collector_timing,
+        "dataReductionRatios": data_reduction_ratios,
         "tree": {
             "name": f"Storage Pool: {sp_info.get('name', 'Nutanix_SP')}",
             "formatted_size": format_bytes(sp_capacity),
