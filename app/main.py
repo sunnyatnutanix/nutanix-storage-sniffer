@@ -1125,9 +1125,13 @@ def process_container_centric_logs(sections: dict):
             formula_terms = dict(info.get("shared_formula_terms") or {})
             formula_terms.update({
                 "logical_shared_clone": logical_clone,
+                "family_max_logical_shared_clone": logical_clone,
                 "replication_factor": replication_factor,
                 "compression_ratio": container_compression,
                 "physical_shared_storage": primary_shared,
+                "logical_shared_storage": logical_clone,
+                "physical_formula": "(family_max_logical_shared_clone × RF) / compression",
+                "logical_formula": "family_max_logical_shared_clone",
             })
             shared_storage_nodes.append({
                 **parent_vd,
@@ -1142,6 +1146,9 @@ def process_container_centric_logs(sections: dict):
                 "real_bytes": primary_shared,
                 "display_source": "logical_shared_clone_x_rf_div_compression",
                 "shared_storage_bytes": primary_shared,
+                "logical_shared_storage_bytes": logical_clone,
+                "physical_shared_storage_bytes": primary_shared,
+                "shared_clone_usage_bytes": logical_clone,
                 "shared_storage_curator_estimated_bytes": max_curator_shared_est,
                 "shared_storage_mode": "physical",
                 "shared_formula_source": "logical_shared_clone_x_rf_div_compression",
@@ -1150,6 +1157,8 @@ def process_container_centric_logs(sections: dict):
                 "compression_ratio": container_compression,
                 "formatted_size": format_bytes(primary_shared),
                 "formatted_shared_storage": format_bytes(primary_shared),
+                "formatted_logical_shared_storage": format_bytes(logical_clone),
+                "formatted_physical_shared_storage": format_bytes(primary_shared),
                 "formatted_inherited_usage": format_bytes(max_curator_shared_est),
                 "inherited_usage_bytes": max_curator_shared_est,
                 "formatted_shared_storage_curator_estimated": format_bytes(max_curator_shared_est),
@@ -1878,6 +1887,9 @@ def process_container_chain_graph_logs(sections: dict):
                 "replication_factor": cg.replication_factor,
                 "compression_ratio": container_compression,
                 "physical_shared_storage": physical_shared,
+                "logical_shared_storage": shared_clone_usage,
+                "physical_formula": "(family_max_logical_shared_clone × RF) / compression",
+                "logical_formula": "family_max_logical_shared_clone",
             })
             candidate = {
                 "name": lineage_id,
@@ -1885,6 +1897,8 @@ def process_container_chain_graph_logs(sections: dict):
                 "vdisk_id": None,
                 "lineage_id": lineage_id,
                 "shared_clone_usage_bytes": shared_clone_usage,
+                "logical_shared_storage_bytes": shared_clone_usage,
+                "physical_shared_storage_bytes": physical_shared,
                 "chain_id": selected_chain_id,
                 "root_chain_id": tree.root_chain_id,
                 "chain_tree_id": tree.chain_tree_id,
@@ -1906,6 +1920,8 @@ def process_container_chain_graph_logs(sections: dict):
                 "replication_factor": cg.replication_factor,
                 "compression_ratio": container_compression,
                 "formatted_size": format_bytes(physical_shared),
+                "formatted_logical_shared_storage": format_bytes(shared_clone_usage),
+                "formatted_physical_shared_storage": format_bytes(physical_shared),
                 "container_name": cg.container_name,
             }
 

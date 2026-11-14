@@ -640,6 +640,12 @@
         let activeLegendFilter = null; 
         let currentDrawnNodes = [];
         let lastHoveredNode = null;
+        let sharedStorageModeByLineage = new Map(); // lineageId -> "physical" | "logical"
+        let sharedStorageBadgeHitBoxes = []; // [{ lineageId, x0, y0, x1, y1 }]
+        let sharedStorageAnimFrame = null;
+        let sharedStorageAnimToken = 0;
+        let lastSharedStorageBadgeToggleAt = 0;
+        const SHARED_STORAGE_TOGGLE_MS = 250;
         let loadedOfflineFileName = "";
         let loadedOfflineRawText = "";
         let loadedOfflineSections = [];
@@ -1317,6 +1323,191 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             if (info.is_shared_parent_vdisk) {
                 const byName = String(info.name || "").trim();
                 if (byName) return byName;
+            }
+            return null;
+        }
+
+        function getSharedStorageLogicalBytes(info) {
+            if (!info) return 0;
+            const terms = info.shared_formula_terms || {};
+            const candidates = [
+                info.logical_shared_storage_bytes,
+                info.shared_clone_usage_bytes,
+                terms.family_max_logical_shared_clone,
+                terms.logical_shared_storage,
+                terms.logical_shared_clone,
+            ];
+            for (const c of candidates) {
+                const n = Number(c);
+                if (Number.isFinite(n) && n > 0) return Math.trunc(n);
+            }
+            return 0;
+        }
+
+        function getSharedStoragePhysicalBytes(info) {
+            if (!info) return 0;
+            const terms = info.shared_formula_terms || {};
+            const candidates = [
+                info.physical_shared_storage_bytes,
+                terms.physical_shared_storage,
+            ];
+            for (const c of candidates) {
+                const n = Number(c);
+                if (Number.isFinite(n) && n > 0) return Math.trunc(n);
+            }
+            const logical = getSharedStorageLogicalBytes(info);
+            const rf = Number(info.replication_factor || terms.replication_factor || 2) || 2;
+            const compression = Number(info.compression_ratio || terms.compression_ratio || 1) || 1;
+            if (logical <= 0 || compression <= 0) return 0;
+            return Math.trunc((logical * rf) / compression);
+        }
+
+        function getSharedStorageModeForInfo(info) {
+            const lid = resolveNodeLineageId(info);
+            if (lid && sharedStorageModeByLineage.has(lid)) {
+                return sharedStorageModeByLineage.get(lid) === "logical" ? "logical" : "physical";
+            }
+            const mode = String(info && info.shared_storage_mode || "physical").toLowerCase();
+            return mode === "logical" ? "logical" : "physical";
+        }
+
+        function sharedStorageDisplayBytes(info, mode = null) {
+            const m = mode || getSharedStorageModeForInfo(info);
+            return m === "logical" ? getSharedStorageLogicalBytes(info) : getSharedStoragePhysicalBytes(info);
+        }
+
+        function sharedStorageFormulaLabel(info, mode = null) {
+            const m = mode || getSharedStorageModeForInfo(info);
+            const terms = (info && info.shared_formula_terms) || {};
+            if (m === "logical") {
+                return terms.logical_formula || "family_max_logical_shared_clone";
+            }
+            return terms.physical_formula || "(family_max_logical_shared_clone × RF) / compression";
+        }
+
+        function applySharedStorageDisplayMode(info, mode, layoutBytes = null) {
+            if (!info || !info.is_shared_parent_vdisk) return;
+            const m = mode === "logical" ? "logical" : "physical";
+            const logical = getSharedStorageLogicalBytes(info);
+            const physical = getSharedStoragePhysicalBytes(info);
+            const display = layoutBytes != null
+                ? Math.max(0, Math.trunc(Number(layoutBytes) || 0))
+                : (m === "logical" ? logical : physical);
+            const areaBytes = display > 0 ? display : 1;
+            info.shared_storage_mode = m;
+            // Layout-only: change value/size for this lineage tile. Do not touch parent
+            // aggregate_exclusive_bytes / container totals (those stay Physical-sized).
+            info.value = areaBytes;
+            info.real_bytes = display;
+            info.shared_storage_bytes = display;
+            info.formatted_size = formatBytes(display);
+            info.logical_shared_storage_bytes = logical;
+            info.physical_shared_storage_bytes = physical;
+            info.formatted_logical_shared_storage = formatBytes(logical);
+            info.formatted_physical_shared_storage = formatBytes(physical);
+            info.shared_formula_source = m === "logical"
+                ? "family_max_logical_shared_clone"
+                : "logical_shared_clone_x_rf_div_compression";
+            info.display_source = info.shared_formula_source;
+        }
+
+        function syncSharedStorageModesInTree(root = fullRootNode) {
+            if (!root) return;
+            root.each(n => {
+                const data = n.data;
+                if (!data || !data.is_shared_parent_vdisk) return;
+                applySharedStorageDisplayMode(data, getSharedStorageModeForInfo(data));
+            });
+        }
+
+        function setSharedStorageMode(lineageId, mode, { animate = true, inspectAfter = true } = {}) {
+            const lid = String(lineageId || "").trim();
+            if (!lid) return;
+            const next = mode === "logical" ? "logical" : "physical";
+            const prev = sharedStorageModeByLineage.has(lid)
+                ? (sharedStorageModeByLineage.get(lid) === "logical" ? "logical" : "physical")
+                : "physical";
+            if (prev === next && !animate) {
+                syncSharedStorageModesInTree();
+                if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+                return;
+            }
+            sharedStorageModeByLineage.set(lid, next);
+
+            const targets = [];
+            if (fullRootNode) {
+                fullRootNode.each(n => {
+                    if (n.data && n.data.is_shared_parent_vdisk && resolveNodeLineageId(n.data) === lid) {
+                        targets.push(n.data);
+                    }
+                });
+            }
+            if (!targets.length) return;
+
+            const fromBytes = sharedStorageDisplayBytes(targets[0], prev);
+            const toBytes = sharedStorageDisplayBytes(targets[0], next);
+
+            const finish = () => {
+                targets.forEach(data => applySharedStorageDisplayMode(data, next));
+                if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+                if (inspectAfter) {
+                    const diskNode = findDiskNodeByData(targets[0]);
+                    if (diskNode) {
+                        inspectNode(diskNode);
+                        syncTreeHighlight(diskNode);
+                    }
+                }
+            };
+
+            if (!animate || fromBytes === toBytes || !currentHierarchyNode) {
+                finish();
+                return;
+            }
+
+            if (sharedStorageAnimFrame) {
+                cancelAnimationFrame(sharedStorageAnimFrame);
+                sharedStorageAnimFrame = null;
+            }
+            const token = ++sharedStorageAnimToken;
+            const start = performance.now();
+            const step = (now) => {
+                if (token !== sharedStorageAnimToken) return;
+                const t = Math.min(1, (now - start) / SHARED_STORAGE_TOGGLE_MS);
+                const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+                const layoutBytes = Math.round(fromBytes + (toBytes - fromBytes) * eased);
+                targets.forEach(data => applySharedStorageDisplayMode(data, next, layoutBytes));
+                if (currentHierarchyNode) renderSpaceSnifferView(currentHierarchyNode);
+                if (t < 1) {
+                    sharedStorageAnimFrame = requestAnimationFrame(step);
+                } else {
+                    sharedStorageAnimFrame = null;
+                    finish();
+                }
+            };
+            sharedStorageAnimFrame = requestAnimationFrame(step);
+        }
+
+        function toggleSharedStorageMode(info, opts = {}) {
+            if (!info || !info.is_shared_parent_vdisk) return;
+            const lid = resolveNodeLineageId(info);
+            if (!lid) return;
+            const cur = getSharedStorageModeForInfo(info);
+            setSharedStorageMode(lid, cur === "logical" ? "physical" : "logical", opts);
+        }
+
+        function toggleSharedStorageModeByLineage(lineageId) {
+            const lid = String(lineageId || "").trim();
+            if (!lid) return;
+            const cur = sharedStorageModeByLineage.has(lid)
+                ? (sharedStorageModeByLineage.get(lid) === "logical" ? "logical" : "physical")
+                : "physical";
+            setSharedStorageMode(lid, cur === "logical" ? "physical" : "logical");
+        }
+
+        function hitTestSharedStorageBadge(x, y) {
+            for (let i = sharedStorageBadgeHitBoxes.length - 1; i >= 0; i--) {
+                const b = sharedStorageBadgeHitBoxes[i];
+                if (x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1) return b;
             }
             return null;
         }
@@ -2692,10 +2883,12 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
                 overlay.classList.add("hidden");
                 rawTreeData = data.tree;
+                sharedStorageModeByLineage.clear();
                 
                 fullRootNode = d3.hierarchy(rawTreeData)
                     .sum(d => d.value || 0)
                     .sort((a, b) => b.value - a.value);
+                syncSharedStorageModesInTree(fullRootNode);
                 rebuildLineageIndexes();
                 resetHierarchyTreeState();
                 
@@ -2735,10 +2928,12 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
 
         function applyScanTreeData(data) {
             rawTreeData = data.tree;
+            sharedStorageModeByLineage.clear();
 
             fullRootNode = d3.hierarchy(rawTreeData)
                 .sum(d => d.value || 0)
                 .sort((a, b) => b.value - a.value);
+            syncSharedStorageModesInTree(fullRootNode);
             rebuildLineageIndexes();
             resetHierarchyTreeState();
 
@@ -3804,6 +3999,26 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             const rect = canvas.getBoundingClientRect();
             const x = event.clientX - rect.left;
             const y = event.clientY - rect.top;
+
+            // Badge click toggles Physical/Logical for that lineage Shared Storage block only.
+            const badgeHit = hitTestSharedStorageBadge(x, y);
+            if (badgeHit && badgeHit.lineageId) {
+                event.preventDefault();
+                event.stopPropagation();
+                hideFloatingTooltip();
+                const now = performance.now();
+                // Debounce so a badge double-click does not flip twice (click + click).
+                if (now - lastSharedStorageBadgeToggleAt < SHARED_STORAGE_TOGGLE_MS + 50) return;
+                lastSharedStorageBadgeToggleAt = now;
+                setSharedStorageMode(
+                    badgeHit.lineageId,
+                    getSharedStorageModeForInfo(badgeHit.data || { lineage_id: badgeHit.lineageId, is_shared_parent_vdisk: true }) === "logical"
+                        ? "physical"
+                        : "logical"
+                );
+                return;
+            }
+
             const found = hitTestTreemap(x, y);
 
             if (!found) return;
@@ -3829,6 +4044,26 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             }
         }
 
+        function onCanvasDblClick(event) {
+            const canvas = document.getElementById("treemap-canvas");
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+            // Badge already toggles on single click; skip dblclick there to avoid a third flip.
+            if (hitTestSharedStorageBadge(x, y)) {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+            }
+            const found = hitTestTreemap(x, y);
+            if (!found || !found.data || !found.data.is_shared_parent_vdisk) return;
+            event.preventDefault();
+            event.stopPropagation();
+            hideFloatingTooltip();
+            toggleSharedStorageMode(found.data);
+        }
+
         function renderSpaceSnifferView(node) {
             const wrapper = document.getElementById("canvas-wrapper");
             const width = wrapper.clientWidth;
@@ -3849,6 +4084,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 canvas.addEventListener("mousemove", onCanvasMouseMove);
                 canvas.addEventListener("mouseout", onCanvasMouseOut);
                 canvas.addEventListener("click", onCanvasClick);
+                canvas.addEventListener("dblclick", onCanvasDblClick);
                 container.appendChild(canvas);
             }
 
@@ -3927,6 +4163,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
             // Flat divider background (shows through gutters between tiles / under titles).
             ctx.fillStyle = "#0f172a";
             ctx.fillRect(0, 0, width, height);
+            sharedStorageBadgeHitBoxes = [];
 
             currentDrawnNodes.forEach(d => {
                 const w = Math.max(0, d.x1 - d.x0);
@@ -4040,6 +4277,36 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                             ctx.font = "bold 9px sans-serif";
                             ctx.fillText(`🔗`, d.x0 + 7, textY);
                             textY += 14;
+                        }
+                        if (d.data.is_shared_parent_vdisk && w >= 72 && h >= 22) {
+                            const mode = getSharedStorageModeForInfo(d.data);
+                            const badgeText = mode === "logical" ? "[LOGICAL]" : "[PHYSICAL]";
+                            ctx.font = `bold ${Math.round(9 * textScale)}px monospace`;
+                            const badgePadX = 4;
+                            const badgePadY = 2;
+                            const badgeW = Math.ceil(ctx.measureText(badgeText).width) + badgePadX * 2;
+                            const badgeH = Math.round(12 * textScale) + badgePadY * 2;
+                            const badgeX = d.x0 + 4;
+                            const badgeY = d.y0 + 4;
+                            ctx.fillStyle = mode === "logical" ? "rgba(16, 185, 129, 0.92)" : "rgba(14, 165, 233, 0.92)";
+                            ctx.fillRect(badgeX, badgeY, badgeW, badgeH);
+                            ctx.fillStyle = "#0f172a";
+                            ctx.textAlign = "start";
+                            ctx.textBaseline = "middle";
+                            ctx.fillText(badgeText, badgeX + badgePadX, badgeY + badgeH / 2 + 0.5);
+                            ctx.textBaseline = "alphabetic";
+                            const lid = resolveNodeLineageId(d.data);
+                            if (lid) {
+                                sharedStorageBadgeHitBoxes.push({
+                                    lineageId: lid,
+                                    data: d.data,
+                                    x0: badgeX,
+                                    y0: badgeY,
+                                    x1: badgeX + badgeW,
+                                    y1: badgeY + badgeH,
+                                });
+                            }
+                            textY = Math.max(textY, badgeY + badgeH + 10);
                         }
                         // Center usage text inside the leaf block for readability.
                         const usageText = formatBytes(getRealNodeSum(d));
@@ -4161,6 +4428,28 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                     <div class="mt-1 pt-1 border-t border-slate-700/50"><span class="text-slate-400">Member Chains:</span> <span class="font-mono text-slate-200 font-bold">${info.member_chain_ids ? info.member_chain_ids.length : 0}</span></div>
                     <div><span class="text-slate-400">VDisks in Family:</span> <span class="font-mono text-slate-200 font-bold">${info.vdisk_ids ? info.vdisk_ids.length : 0}</span></div>
                 `;
+            } else if (info.is_shared_parent_vdisk) {
+                const mode = getSharedStorageModeForInfo(info);
+                const logicalBytes = getSharedStorageLogicalBytes(info);
+                const physicalBytes = getSharedStoragePhysicalBytes(info);
+                const terms = info.shared_formula_terms || {};
+                const rf = terms.replication_factor || info.replication_factor || 2;
+                const compression = terms.compression_ratio || info.compression_ratio || 1;
+                html += `
+                    <div><span class="text-slate-400">Mode:</span> <span class="font-mono ${mode === "logical" ? "text-emerald-300" : "text-sky-300"} font-bold">${mode === "logical" ? "[LOGICAL]" : "[PHYSICAL]"}</span></div>
+                    <div><span class="text-slate-400">Display Size:</span> <span class="text-amber-300 font-bold">${formatBytes(sharedStorageDisplayBytes(info, mode))}</span></div>
+                    <div><span class="text-slate-400">Lineage ID:</span> <span class="font-mono text-slate-200 text-[0.85em] break-all">${resolveNodeLineageId(info) || info.name || "n/a"}</span></div>
+                    <div class="mt-1 pt-1 border-t border-slate-700/50 space-y-0.5">
+                        <div><span class="text-slate-400">Physical:</span> <span class="text-sky-300 font-bold">${formatBytes(physicalBytes)}</span></div>
+                        <div><span class="text-slate-400">Logical:</span> <span class="text-emerald-300 font-bold">${formatBytes(logicalBytes)}</span></div>
+                        <div><span class="text-slate-400">RF / Compression:</span> <span class="text-slate-200 font-bold">${rf} / ${compression}</span></div>
+                    </div>
+                    <div class="mt-1 pt-1 border-t border-slate-700/50 text-[0.8em] text-slate-400 space-y-0.5">
+                        <div><span class="text-slate-500">Physical formula:</span> ${sharedStorageFormulaLabel(info, "physical")}</div>
+                        <div><span class="text-slate-500">Logical formula:</span> ${sharedStorageFormulaLabel(info, "logical")}</div>
+                        <div class="text-slate-500">Double-click block or click badge to toggle this lineage only</div>
+                    </div>
+                `;
             } else if (isVmGroup || isVgGroup) {
                 const leafRows = [];
                 const gatherRows = (node) => {
@@ -4208,7 +4497,7 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 if (vdiskSizeSum > 0 || info.vdisk_size !== undefined) html += `<div><span class="text-slate-400">Provisioned Size:</span> <span class="text-emerald-300 font-bold">${formatBytes(vdiskSizeSum)}</span></div>`;
             }
 
-            if (info.vdisk_id || (!info.children && !info.is_shared_clone_block && !info.is_base_share_block && !info.is_partial_extents_block && !info.is_total_garbage_block)) {
+            if (!info.is_shared_parent_vdisk && (info.vdisk_id || (!info.children && !info.is_shared_clone_block && !info.is_base_share_block && !info.is_partial_extents_block && !info.is_total_garbage_block))) {
                 html += `
                     <div class="text-[0.85em] text-slate-300 space-y-0.5 mt-1 border-t border-slate-800 pt-1">
                         <div><span class="text-slate-400">VDisk ID:</span> ${info.vdisk_id || "n/a"}</div>
@@ -4917,19 +5206,39 @@ print("[8/8] DONE: upload 'vdisk_sniffer_offline.log' to VDisk Sniffer.")`;
                 fieldsHtml += `</div></div></div>`;
             } else if (info.is_shared_parent_vdisk) {
                 const leafRows = Array.isArray(info.leaf_candidates) ? info.leaf_candidates : [];
+                const mode = getSharedStorageModeForInfo(info);
+                const logicalBytes = getSharedStorageLogicalBytes(info);
+                const physicalBytes = getSharedStoragePhysicalBytes(info);
+                const terms = info.shared_formula_terms || {};
+                const rf = terms.replication_factor || info.replication_factor || 2;
+                const compression = terms.compression_ratio || info.compression_ratio || 1;
+                const lid = resolveNodeLineageId(info) || "";
                 const chainRows = (leafRows.length
                     ? leafRows.map(r => ({ chainId: String(r.chain_id), sharedBytes: Number(r.shared_bytes || 0) }))
                     : [{ chainId: String(info.selected_shared_chain_id || info.chain_id || ""), sharedBytes: Number(info.shared_storage_bytes || info.real_bytes || 0) }]
                 ).filter(r => r.chainId);
                 fieldsHtml += `
                     <div class="mt-2 p-2.5 bg-slate-950/70 border border-sky-500/40 rounded-lg space-y-1.5 font-sans">
-                        <div class="text-xs font-bold text-sky-400 border-b border-slate-800 pb-1">🔗 Root Chain Shared Storage</div>
-                        <div class="flex justify-between items-center"><span class="text-slate-400">Shared Size:</span> <span class="font-mono text-amber-300 font-bold text-xs">${formatBytes(info.shared_storage_bytes || info.real_bytes || 0)}</span></div>
+                        <div class="text-xs font-bold text-sky-400 border-b border-slate-800 pb-1 flex items-center justify-between gap-2">
+                            <span>🔗 Root Chain Shared Storage</span>
+                            <button type="button" onclick="toggleSharedStorageModeByLineage('${escapeHtml(lid)}')"
+                                class="px-2 py-0.5 rounded border font-mono text-[10px] font-bold ${mode === "logical" ? "border-emerald-500/60 bg-emerald-900/40 text-emerald-300" : "border-sky-500/60 bg-sky-900/40 text-sky-300"}"
+                                title="Toggle Physical/Logical for this lineage only">
+                                ${mode === "logical" ? "[LOGICAL]" : "[PHYSICAL]"}
+                            </button>
+                        </div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Display Size:</span> <span class="font-mono text-amber-300 font-bold text-xs">${formatBytes(sharedStorageDisplayBytes(info, mode))}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Physical:</span> <span class="font-mono text-sky-300 font-bold text-xs">${formatBytes(physicalBytes)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">Logical:</span> <span class="font-mono text-emerald-300 font-bold text-xs">${formatBytes(logicalBytes)}</span></div>
+                        <div class="flex justify-between items-center"><span class="text-slate-400">RF / Compression:</span> <span class="font-mono text-slate-200 font-bold">${rf} / ${compression}</span></div>
+                        <div class="text-[10px] text-slate-400">Physical: ${escapeHtml(sharedStorageFormulaLabel(info, "physical"))}</div>
+                        <div class="text-[10px] text-slate-400">Logical: ${escapeHtml(sharedStorageFormulaLabel(info, "logical"))}</div>
                         <div class="flex justify-between items-center"><span class="text-slate-400">Lineage ID:</span> <span class="font-mono text-slate-200 text-[10px] break-all">${valOrNa(info.lineage_id || info.name)}</span></div>
                         <div class="flex justify-between items-center"><span class="text-slate-400">Root Chain ID:</span> <span class="font-mono text-slate-200 text-[10px] break-all">${valOrNa(info.root_chain_id || info.chain_id)}</span></div>
                         <div class="flex justify-between items-center"><span class="text-slate-400">Selected Chain:</span> <span class="font-mono text-emerald-300 text-[10px] break-all">${valOrNa(info.selected_shared_chain_id || info.chain_id)}</span></div>
-                        ${info.shared_formula_source ? `<div class="flex justify-between items-center"><span class="text-slate-400">Shared Formula:</span> <span class="font-mono text-cyan-300">${valOrNa(info.shared_formula_source)}</span></div>` : ""}
+                        ${info.shared_formula_source ? `<div class="flex justify-between items-center"><span class="text-slate-400">Active Formula:</span> <span class="font-mono text-cyan-300">${valOrNa(info.shared_formula_source)}</span></div>` : ""}
                         ${info.shared_formula_terms ? `<div class="text-[10px] text-slate-400">Terms: live=${formatBytes(info.shared_formula_terms.logical_live || 0)}, clone=${formatBytes(info.shared_formula_terms.logical_shared_clone || 0)}, peg=${formatBytes(info.shared_formula_terms.physical_peg || 0)}, exclusive_sum=${formatBytes(info.shared_formula_terms.exclusive_sum || 0)}</div>` : ""}
+                        <div class="text-[10px] text-slate-500">Double-click the treemap tile or click the badge to toggle this lineage only. Container totals stay Physical-sized.</div>
                         ${leafRows.length ? `<div class="text-[10px] text-slate-400 pt-1 border-t border-slate-800">Leaf Candidates: ${leafRows.map(r => `${r.chain_id}:${formatBytes(r.shared_bytes || 0)}`).join(", ")}</div>` : ""}
                         ${chainRows.length ? `
                         <div class="mt-2 pt-2 border-t border-slate-800 space-y-2">
